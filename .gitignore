@@ -1,0 +1,15 @@
+# Never commit these: HAR captures of the booking flow contain real Unlimited
+# card numbers, bookingProcessId, customer IDs and names in cleartext.
+*.har
+*.har.gz
+captures/
+scratch/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+node_modules/
