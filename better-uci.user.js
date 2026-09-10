@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         better-uci
 // @namespace    https://github.com/n-klocke/better-uci
-// @version      3.0.0
+// @version      3.0.1
 // @description  Batch-redeem UCI Unlimited cards on the booking page, and a denser, filterable programme browser on the kinoprogramm page.
 // @author       n-klocke
 // @license      MIT
@@ -180,11 +180,15 @@
         font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px;
       }
 
-      /* Unlimited Card is forced open by ensureAlwaysExpanded() in JS —
-         this just removes the now-pointless click affordance on its own
-         header, so it doesn't visually invite a click that does nothing. */
-      #payment-type-uc-header { cursor: default; pointer-events: none; }
-      #payment-type-uc-header .fa-chevron-down { display: none; }
+      /* Unlimited Card is auto-expanded by ensureAlwaysExpanded() in JS on
+         every poll tick. That's a best-effort attempt, not a guarantee —
+         confirmed unreliable on iOS Safari (reported: section loads neither
+         expanded nor expandable), where whatever native timing this races
+         against apparently doesn't behave like desktop. Deliberately no
+         longer disables the header's own click-to-expand (previously
+         cursor:default + pointer-events:none + hidden chevron): if the
+         auto-expand poll loses that race, the user still needs a working
+         native fallback to open it by hand instead of being stuck. */
 
       /* Movie Points / Gutscheine — demoted behind #uci-secondary-toggle
          (see setupLeanPaymentExtras()). Hidden by default; once revealed,
@@ -603,13 +607,19 @@
   // event names aren't confirmed on this page) is what actually keeps
   // these open even if the site's own accordion logic — e.g. its
   // data-parent mutual-exclusion behavior when another section opens —
-  // tries to close them.
+  // tries to close them. Both the class and the inline height reset are
+  // unconditional on every tick now, not just when 'show' is missing:
+  // Bootstrap's collapse can leave 'show' applied while height is still
+  // mid-transition (e.g. stuck at an inline '0px' from an interrupted
+  // animation) — that combination previously fell through this function
+  // untouched since the old guard only fired when 'show' itself was
+  // absent, leaving the panel visually collapsed with no further poll
+  // tick able to fix it.
   function ensureAlwaysExpanded(id) {
     const el = document.getElementById(id);
-    if (el && !el.classList.contains('show')) {
-      el.classList.add('show');
-      el.style.height = '';
-    }
+    if (!el) return;
+    el.classList.add('show');
+    el.style.height = '';
   }
 
   // Movie Points and Gutscheine are real, occasionally-needed features,
