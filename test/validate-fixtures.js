@@ -1,19 +1,17 @@
 #!/usr/bin/env node
 // Validates the claims in docs/API.md against real captured fixtures, using
-// the actual parsing/grouping code from better-uci.user.js — not a copy of
-// it. The userscript is a single self-contained IIFE, not built as a
-// module, so it can't be require()'d directly in a browser; but under
-// `node` (module.exports exists) it takes an early-return branch right
-// after 'use strict' that exports the pure functions instead of running any
-// of the browser-only init code. See that branch in better-uci.user.js for
-// details.
+// the actual seatStr parsing/grouping code — not a copy of it. Since v3.0.0
+// that code lives in archive/seat-map.js (the custom seat map was paused and
+// moved out of better-uci.user.js), which keeps a `module.exports` early-
+// return branch at the top so it can be require()'d under plain `node`
+// without running any of its browser-only code.
 //
 // Run: node test/validate-fixtures.js
 
 const fs = require('fs');
 const path = require('path');
 const assert = require('assert');
-const { parseSeatStr, groupSeatsByRow, seatMapHTML } = require('../better-uci.user.js');
+const { parseSeatStr, groupSeatsByRow, seatMapHTML } = require('../archive/seat-map.js');
 
 let passed = 0;
 function check(name, fn) {

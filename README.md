@@ -12,6 +12,27 @@ independent fixes for the UCI Kino website:
    never runs.
 3. **[Install better-uci](https://raw.githubusercontent.com/n-klocke/better-uci/main/better-uci.user.js)**
 Updates install themselves.
+## iPhone / iPad
+Tampermonkey doesn't exist on iOS. Use
+[Userscripts](https://apps.apple.com/app/userscripts/id1463298887) instead —
+a free, open-source Safari extension that runs `.user.js` files directly, no
+desktop needed.
+1. Install **Userscripts** from the App Store.
+2. **Settings** app → **Safari** → **Extensions** → **Userscripts** → turn it
+   on → allow it for **All Websites** (or at least the `uci-kinowelt.de`
+   domains).
+3. In Safari, open
+   [the raw script URL](https://raw.githubusercontent.com/n-klocke/better-uci/main/better-uci.user.js)
+   — Userscripts should offer to install it. If it doesn't, open the
+   Userscripts app itself and add it from that same URL.
+4. Visit the booking or programme page, tap the puzzle-piece icon in
+   Safari's address bar → **Userscripts**, and confirm better-uci is
+   enabled for that site.
+Updates show up in that same Userscripts popup (cloud icon), tap to
+install. Saved cards don't sync from your desktop: bring them over with
+**Unlimited Cards verwalten** → Exportieren / Importieren.
+Only Safari works this way — Chrome, Firefox, etc. on iOS are all just
+Safari's engine underneath and can't run extensions at all.
 ## Booking page: card redemption
 <img width="553" height="473" alt="Screenshot 2026-08-15 at 18 49 11" src="https://github.com/user-attachments/assets/fc0470f9-c531-46dd-8c3f-8e190e38fcba" />
 Replaces the **Unlimited Card** section of the payment step with a list of
@@ -46,7 +67,8 @@ Replaces the poster grid with a list view:
   same-origin. Nothing is sent anywhere else — no analytics, no third
   party, not even to me.
 - **Minimal permissions.** Just `GM_setValue`/`GM_getValue` for local
-  storage — no clipboard, no cross-origin requests.
+  storage (or `GM.setValue`/`GM.getValue`, which is all Userscripts on
+  iPhone offers) — no clipboard, no cross-origin requests.
 - **No new login.** Reuses the page's own session; it never sees your UCI
   credentials.
 - **Not obfuscated.** One plain-text file — open it in Tampermonkey and
@@ -66,6 +88,9 @@ No panel on either page? Filter the console for `[uci-batch]` (booking page)
 or `[uci-browse]` (programme page) — both log what they find on load, so an
 empty filter usually means the script isn't running (check install step 2)
 rather than a bug in the page logic.
+On iPhone there's no console: open **Unlimited Cards verwalten** in the
+panel. Its last line shows whether the booking data and storage are
+reachable, and internal errors are listed in the panel's log box.
 ## Disclaimer
 Unofficial, not affiliated with UCI. Automates only what you're entitled to
 do as a cardholder or visitor, which may still conflict with their terms.

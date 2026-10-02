@@ -22,9 +22,14 @@ change; Tampermonkey uses it to decide whether an update exists.
 
 ## Testing model — read this before assuming anything works
 
-There is no way to execute this against the live site from here. The only
-way to validate real behavior is the person reloading the actual page in
-their own browser, against their own session, and reporting back.
+Real behavior only shows on the live site, against the person's own session.
+When a browser-automation tool attached to their logged-in Chrome is
+available (Claude in Chrome), that works. Install a local build by serving
+the repo on 127.0.0.1 and opening the `.user.js` URL; the person clicks
+Update in Tampermonkey. Phone widths: load the page in a fixed-width
+`<iframe>` overlay, since Tampermonkey runs in iframes too. iPhone Safari:
+see the Userscripts section below. Without those tools, the only check is
+the person reloading the page and reporting back.
 
 `test/validate-fixtures.js` is not a substitute for that. It validates
 parsing logic against a captured API response offline — does the code
@@ -84,6 +89,50 @@ those rounds could have been skipped by asking for real numbers first.
   minimal. It's baked into the seat map's own internal rendering; leave it
   alone rather than guessing at a fix.
 
+## Userscripts (iPhone Safari) quirks — all confirmed in the iOS simulator
+
+On iPhone the script runs under the Userscripts extension (quoid/userscripts),
+not Tampermonkey. It differs in ways that break code that works on desktop:
+
+- No `GM_getValue`/`GM_setValue`: Userscripts drops `GM_*` grants, and calling
+  one throws a ReferenceError. It only has the async `GM.getValue`/
+  `GM.setValue`. That ReferenceError was the 3.1.6 iPhone "Warenkorb wird
+  gelesen…" hang. All storage goes through `store` at the top of the file.
+- Which JS world the script runs in depends on its grants. With no valid
+  grant it runs in the page world, as an inline `<script>`, so it's subject
+  to CSP. With any valid grant, such as `GM.getValue`, it runs in Safari's
+  isolated content world, where there are no page globals and no
+  `unsafeWindow`. Since 3.1.7 it's the latter, and `window.book` and the
+  page's jQuery are reached through `pageBridge` (an injected page script
+  talking over DOM events with JSON-string payloads). UCI sends no
+  Content-Security-Policy, which is what allows that injected script. If UCI
+  ever adds one, the bridge is the first thing to break, and the panel then
+  says "Buchungsdaten nicht lesbar".
+- That content world has a global `$` of its own: Userscripts' minified
+  content script declares `async function $`. Never detect the page by `$`,
+  only by `book`.
+- The relative order of several userscripts isn't reliable (its sort
+  comparator returns booleans), so a helper script can't count on running
+  first.
+- The phone has no console. The panel's "Unlimited Cards verwalten" section
+  ends in a status line (page access, storage), and poll() errors land in
+  the panel log.
+
+Testing it for real: build Userscripts from source for the iOS simulator
+(Xcode required; node isn't installed, bun works):
+`git clone --branch v4.8.6 https://github.com/quoid/userscripts` (match the
+App Store version), then `bun install`, `bun scripts/build-app.js`,
+`SAFARI_PLATFORM=ios bun scripts/build-ext-safari-15.js`, then
+`xcodebuild -project xcode/Userscripts.xcodeproj -scheme iOS -configuration
+Debug -sdk iphonesimulator`. Install the .app and enable the extension under
+Settings → Apps → Safari → Extensions, allowing "Other Websites". Scripts are
+plain files in the app's Documents folder
+(`xcrun simctl get_app_container <udid> dev.debug.userscripts data`). Edits
+to an existing file apply on reload. A new file needs Userscripts to rebuild
+its index, which happens when you switch away from Safari and back. Web
+Inspector isn't reachable from here, so to see state in screenshots, write it
+into the DOM, e.g. with a throwaway page-world overlay script.
+
 ## Layout
 
 - `better-uci.user.js` — the actual script.
@@ -91,13 +140,15 @@ those rounds could have been skipped by asking for real numbers first.
   open items marked explicitly. Update it when you learn something new
   about the API — it's meant to stay current, not be a one-time snapshot.
 - `fixtures/` — real captured API responses for offline validation.
-- `test/validate-fixtures.js` — run with `node test/validate-fixtures.js`.
-  Imports and exercises the real parsing/grouping code from
-  `better-uci.user.js` (`parseSeatStr`, `groupSeatsByRow`) instead of a
-  hand-maintained copy of it. This works despite the userscript being a
-  self-contained IIFE, not a module: right after `'use strict'` it checks
-  for a Node `module` and, if found, exports those functions and returns
-  immediately, before touching `location`/`document`/GM_*. Real Tampermonkey
-  execution never defines `module`, so that branch is dead code in the
-  browser. If you change `parseSeatStr`, `rowKey`, or `groupSeatsByRow`,
-  just re-run the test — there's no second copy to keep in sync.
+- `archive/seat-map.js` — the paused custom seat map, moved out of the
+  userscript in v3.0.0. Not loaded by Tampermonkey; it's still where
+  `parseSeatStr`, `rowKey`, `groupSeatsByRow`, and `seatMapHTML` live.
+- `test/validate-fixtures.js` — run with `node test/validate-fixtures.js`
+  (or `bun`). Imports and exercises the real parsing/grouping code from
+  `archive/seat-map.js` instead of a hand-maintained copy of it. That file
+  starts with a `module.exports` early-return branch so it can be
+  `require()`d under Node without running its browser-only code. If you
+  change those functions, just re-run the test — there's no second copy to
+  keep in sync. (Before v3.0.3 the test still required them from
+  `better-uci.user.js`, which no longer exports anything, so it crashed on
+  load.)

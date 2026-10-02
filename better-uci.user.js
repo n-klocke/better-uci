@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         better-uci
 // @namespace    https://github.com/n-klocke/better-uci
-// @version      3.0.1
+// @version      3.1.7
 // @description  Batch-redeem UCI Unlimited cards on the booking page, and a denser, filterable programme browser on the kinoprogramm page.
 // @author       n-klocke
 // @license      MIT
@@ -13,16 +13,54 @@
 // @match        https://www.uci-kinowelt.de/*
 // @grant        GM_setValue
 // @grant        GM_getValue
+// @grant        GM.setValue
+// @grant        GM.getValue
 // @run-at       document-start
 // ==/UserScript==
 
 (function () {
   'use strict';
 
+  // Storage. Tampermonkey has the synchronous GM_getValue/GM_setValue.
+  // Userscripts — the Safari extension this runs under on iPhone — has
+  // neither: it drops GM_* grants outright, so calling one throws a
+  // ReferenceError. That was the iPhone "Warenkorb wird gelesen…" hang
+  // (confirmed in the iOS simulator: the first poll() tick threw in
+  // wirePaymentMethodMemory and the loop never ran again). Userscripts only
+  // has the async GM.getValue/GM.setValue, so those values are read into a
+  // cache once, before init, and the rest of the script keeps synchronous
+  // get/set. Keys are listed here because the cache has to know them
+  // up front.
+  const STORE_KEYS = ['uci_cards_v1', 'uci_payment_method_v1', 'uci_browse_prefs_v1'];
+  const store = (() => {
+    const sync = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
+    const gm4 = !sync && typeof GM === 'object' && GM !== null && typeof GM.getValue === 'function';
+    const cache = new Map();
+    return {
+      kind: sync ? 'GM_getValue' : gm4 ? 'GM.getValue' : 'keiner',
+      // Runs fn once stored values are readable: right away with the
+      // synchronous API (Tampermonkey timing is unchanged), after one read
+      // of every key with GM.getValue.
+      whenReady(fn) {
+        if (!gm4) return fn();
+        Promise.all(STORE_KEYS.map((k) => GM.getValue(k).then(
+          (v) => { if (v !== undefined) cache.set(k, v); },
+          (err) => console.warn('[better-uci] GM.getValue failed:', k, err))))
+          .then(fn);
+      },
+      get: (k, d) => (sync ? GM_getValue(k, d) : cache.has(k) ? cache.get(k) : d),
+      set(k, v) {
+        if (sync) return GM_setValue(k, v);
+        cache.set(k, v);
+        if (gm4) GM.setValue(k, v).catch((err) => console.warn('[better-uci] GM.setValue failed:', k, err));
+      },
+    };
+  })();
+
   if (location.hostname === 'buchung.uci-kinowelt.de') {
-    initRedeemer();
+    store.whenReady(initRedeemer);
   } else if (location.hostname === 'www.uci-kinowelt.de') {
-    initBrowse();
+    store.whenReady(initBrowse);
   }
 
   function initRedeemer() {
@@ -63,6 +101,23 @@
          this alone frees up most of the width the seat map needs, which
          is why the seat map itself doesn't need to shrink much if at all. */
       #ticketselection { flex: 0 0 300px !important; max-width: 300px !important; }
+      /* Phone: the seat map already drops below (flex-wrap), so a fixed
+         300px column just left the picker a 246px card in a wider box. */
+      @media (max-width: 640px) {
+        #ticketselection { flex: 1 1 100% !important; max-width: none !important; }
+        /* UCI's own #backdrop-wrapper-tickets (dark, 12px padding) plus a
+           15px .container padding wrapped our card in a second box,
+           leaving it 302px of 356px (measured). On phones the native
+           wrapper becomes the card — same box style as the seat map's
+           below it. */
+        #ticket-selection > .container { padding: 0 !important; }
+        #uci-tickets { background: none !important; border: none !important; padding: 0 4px !important; }
+      }
+      /* Seat-map legend (PK 1 / PK 2 / PK 3 / PK 1 LOGE): at phone width
+         its labels broke mid-word ("PK / 1", "PK 1 / LOGE"). Keep each
+         label on one line and let the items wrap as a whole instead. */
+      #SeatingPlanComponentLayoutFooter > div > div { flex-wrap: wrap; justify-content: center; row-gap: 6px; }
+      #SeatingPlanComponentLayoutFooter > div > div * { white-space: nowrap; }
       /* A stylesheet rule rather than a JS-set inline style — the site
          replaces #ticket-type-container wholesale on every quantity
          change, and an inline style doesn't survive onto the replacement
@@ -84,7 +139,11 @@
         gap: 12px; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,.06);
       }
       #uci-tickets .tk2-row:last-child { border-bottom: none; }
-      #uci-tickets .tk2-info { min-width: 0; display: flex; align-items: baseline; justify-content: flex-start; gap: 6px; flex-wrap: wrap; }
+      /* Always a column: inline-with-wrap put the price beside short
+         labels but under long ones (confirmed live: 2 of 4 rows wrapped),
+         so prices zig-zagged between two positions. */
+      #uci-tickets .tk2-info { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 0; }
+      #uci-tickets .tk2-hint { font-size: 11px; color: #ffd77f; text-align: left; white-space: nowrap; }
       #uci-tickets .tk2-label { font-size: 13.5px; font-weight: 600; }
       #uci-tickets .tk2-price { font-size: 12px; color: #8b97a8; }
       #uci-tickets .tk2-stepper {
@@ -140,6 +199,9 @@
       #stepControl .btn-block:disabled {
         background: rgba(255,241,1,.28) !important; color: rgba(0,0,0,.5) !important;
       }
+      /* Explains the greyed-out button — see updateStepHint(). */
+      #uci-step-hint { display: block; margin-top: 6px; font-size: 12px; color: #8b97a8; }
+      #uci-step-hint[hidden] { display: none; }
 
       /* Payment step accordion (Unlimited Card / Movie Points / Gutscheine /
          Buchungsabschluss / Zahlung hinterlegen) — a stack of Bootstrap
@@ -181,14 +243,14 @@
       }
 
       /* Unlimited Card is auto-expanded by ensureAlwaysExpanded() in JS on
-         every poll tick. That's a best-effort attempt, not a guarantee —
-         confirmed unreliable on iOS Safari (reported: section loads neither
-         expanded nor expandable), where whatever native timing this races
-         against apparently doesn't behave like desktop. Deliberately no
-         longer disables the header's own click-to-expand (previously
-         cursor:default + pointer-events:none + hidden chevron): if the
-         auto-expand poll loses that race, the user still needs a working
-         native fallback to open it by hand instead of being stuck. */
+         every poll tick. The header keeps its own click-to-expand anyway
+         (it used to be cursor:default + pointer-events:none + hidden
+         chevron), as a manual fallback if the script's JS ever stops. On
+         iPhone it did: the section loaded neither expanded nor expandable.
+         That was first blamed on a timing race, but the real cause was
+         poll() dying on its first tick (GM_getValue doesn't exist under
+         Userscripts, see store at the top), so ensureAlwaysExpanded()
+         never ran at all. */
 
       /* Movie Points / Gutscheine — demoted behind #uci-secondary-toggle
          (see setupLeanPaymentExtras()). Hidden by default; once revealed,
@@ -227,8 +289,11 @@
          this card-body; the promo-contest widget's own <p>s are nested
          inside #promo-contest-widget, which the native page already keeps
          display:none unless a contest is actually running, so this can't
-         accidentally catch those instead. */
-      #payment-type-paid-content > p { display: none !important; }
+         accidentally catch those instead. Since moved one level down into
+         a .tab-pane (confirmed live: it's still the only <p> anywhere in
+         #payment-type-paid-content), so both positions are covered. */
+      #payment-type-paid-content > p,
+      #payment-type-paid-content > .tab-content > .tab-pane > p { display: none !important; }
 
       /* #payment-selection's own "ZAHLUNGSMITTEL" heading and subtitle —
          redundant once the accordion below it is self-explanatory (forced-
@@ -256,10 +321,10 @@
       /* Confirmed via getComputedStyle: the real culprit was never
          #booking-info at all — it's body.layout-dark's own margin-top,
          hardcoded to 95px to clear the *original* (much taller) header
-         stack. 55px is not a guess: it's #booking-header's own
-         getBoundingClientRect().bottom against this exact CSS, read
-         directly from the live page. */
-      body.layout-dark { margin-top: 55px !important; }
+         stack. Now 30px: #uci-header's measured height (29px + its 1px
+         hairline) once #booking-header is merged into the same row —
+         see the header block below. */
+      body.layout-dark { margin-top: 30px !important; }
       #booking-info .container { max-width: 640px; }
       #booking-info .booking-info-container {
         display: flex !important; align-items: center !important; gap: 12px;
@@ -332,13 +397,44 @@
          padding), not a guess at unknown native sizing — !important is
          required since only that beats an inline style, regardless of
          selector specificity. */
-      #booking-header { top: 30px !important; }
+      /* #booking-header (just the back link) now overlays #uci-header's
+         row instead of stacking below it — see the merged-header block at
+         the end. Its old offset was top:30px (computed from this file's
+         own 22px logo + 3px+3px padding) to sit under #uci-header. */
+      #booking-header { top: 0 !important; }
       /* The logo <img> carries a real inline style="height:40px" (confirmed
          from the live markup) — only an !important rule can move it, since
          an inline style otherwise beats any plain CSS selector regardless
          of specificity. */
       #uci-header img { height: 22px !important; }
-      #uci-header .text-contains-displayname { font-size: 11px; line-height: 22px; }`;
+      #uci-header .text-contains-displayname { font-size: 11px; line-height: 22px; }
+      /* Merged header. Measured live: #uci-header was a light-grey
+         (229,229,229) 29px bar with a logo and the account name, and
+         #booking-header a second, slate (64,75,98) 25px bar below it with
+         a lone back chevron and a 1px white seam — two heavy bars holding
+         almost nothing. Now one row on the page's own background: "‹
+         Zurück" on the left (where the logo was — its link is just "#",
+         so hiding it loses nothing), name on the right, one hairline.
+         #booking-header sits on top of #uci-header's row (top:0 above)
+         with pointer-events off except on the back link itself, so the
+         row underneath stays clickable (checked with elementFromPoint). */
+      #uci-header { background: rgb(0,15,46) !important;
+        border-bottom: 1px solid rgba(255,255,255,.12) !important; }
+      #uci-header .text-contains-displayname { color: #8b97a8 !important; }
+      #uci-header .row > .col-2 img { visibility: hidden; }
+      #booking-header { background: transparent !important; border-bottom: 0 !important;
+        pointer-events: none; padding-top: 2px; }
+      #booking-header .row > .col-2 { text-align: left !important; }
+      #booking-header .row > .col-2 { overflow: visible; }
+      #booking-header #stepBackLink { pointer-events: auto; font-size: 12px !important; white-space: nowrap;
+        color: #cfd6e0 !important; text-decoration: none; }
+      #booking-header #stepBackLink:hover { color: #fff !important; }
+      #booking-header #stepBackLink .fa { color: #fff101; margin-right: 5px; }
+      /* The native label "einen Schritt zurück" is visually hidden (kept
+         as aria-label); a short visible "Zurück" makes the chevron's
+         purpose obvious. */
+      #booking-header #stepBackLinkText { display: none !important; }
+      #booking-header #stepBackLink::after { content: 'Zurück'; }`;
     (document.head || document.documentElement).appendChild(style);
   })();
 
@@ -347,23 +443,139 @@
   const HOST_SEL = '#payment-type-uc-content .card-body';
   const MAX_ATTEMPTS = 4;
 
+  // The page's own globals: window.book (booking state) and its jQuery.
+  // Tampermonkey hands this script the page window as unsafeWindow.
+  // Userscripts (iPhone) has no unsafeWindow, and because this script asks
+  // it for GM.getValue/GM.setValue it runs in Safari's isolated content
+  // world, which can't see page globals at all. There they're reached
+  // through pageBridge below instead. Keyed on book, never on $ alone: that
+  // content world has a global $ of its own. Userscripts' minified content
+  // script declares a top-level `async function $` (its saveTab), which
+  // made the first 3.1.7 draft take that world for the page (seen in the
+  // simulator: "Seite:direkt" while book was unreadable).
   function pageWin() {
     const c = [];
     try { if (typeof unsafeWindow !== 'undefined') c.push(unsafeWindow); } catch {}
     c.push(window);
     try { if (window.wrappedJSObject) c.push(window.wrappedJSObject); } catch {}
-    return c.find((w) => w && w.book) || c.find((w) => w && w.$) || window;
+    return c.find((w) => w && w.book) || null;
   }
-  const getBook = () => pageWin().book;
-  const getJQ = () => pageWin().$;
-  const bpid = () => { const b = getBook(); return b && b.bookingProcessId; };
+  const useBridge = typeof unsafeWindow === 'undefined';
 
-  const loadCards = () => { try { return JSON.parse(GM_getValue(STORE_KEY, '[]')); } catch { return []; } };
-  const saveCards = (c) => GM_setValue(STORE_KEY, JSON.stringify(c));
+  // Runs in the page's own JS world: pageBridge injects it as an inline
+  // <script>, which UCI allows (no Content-Security-Policy, checked). It
+  // answers requests from this script over DOM events on document. Payloads
+  // are JSON strings both ways, because Safari doesn't share event.detail
+  // objects between worlds, only primitives. Only primitive fields of each
+  // price row are copied. That covers every field this file reads, and
+  // skips anything the page attached that wouldn't survive JSON.
+  function pageBridgeMain(ch) {
+    const reply = (id, msg) => document.dispatchEvent(new CustomEvent(ch + ':res',
+      { detail: JSON.stringify(Object.assign({ id }, msg)) }));
+    const plain = (o) => {
+      const r = {};
+      for (const k in o) {
+        const v = o[k];
+        if (v === null || (typeof v !== 'object' && typeof v !== 'function')) r[k] = v;
+      }
+      return r;
+    };
+    document.addEventListener(ch + ':req', (e) => {
+      let m;
+      try { m = JSON.parse(e.detail); } catch { return; }
+      try {
+        const b = window.book;
+        if (m.op === 'state') {
+          reply(m.id, { ok: true, result: b ? {
+            bookingProcessId: b.bookingProcessId,
+            unlimitedCustomerNumber: b.unlimitedCustomerNumber,
+            priceRows: (b.priceRows || []).map(plain),
+          } : null });
+        } else if (m.op === 'post') {
+          window.$.ajax({ url: m.url, method: 'POST', data: m.data })
+            .done((resp) => reply(m.id, { ok: true, result: resp }))
+            .fail((xhr) => reply(m.id, { ok: false, status: xhr.status,
+              body: xhr.responseJSON || null, text: xhr.responseText || '' }));
+        } else if (m.op === 'apply') {
+          Promise.resolve(b.handleBookingServerSuccess(m.resp)).then(
+            () => reply(m.id, { ok: true }),
+            (err) => reply(m.id, { ok: false, error: String((err && err.message) || err) }));
+        }
+      } catch (err) {
+        reply(m.id, { ok: false, error: String((err && err.message) || err) });
+      }
+    });
+  }
+
+  const pageBridge = (() => {
+    const ch = 'better-uci-' + Math.random().toString(36).slice(2);
+    let injected = false, alive = false, seq = 0, syncReply = null;
+    const pending = new Map();
+    function inject() {
+      if (injected) return;
+      injected = true;
+      document.addEventListener(ch + ':res', (e) => {
+        let m;
+        try { m = JSON.parse(e.detail); } catch { return; }
+        alive = true;
+        if (m.id === 0) { syncReply = m; return; }
+        const done = pending.get(m.id);
+        if (done) { pending.delete(m.id); done(m); }
+      });
+      const s = document.createElement('script');
+      s.textContent = `(${pageBridgeMain})(${JSON.stringify(ch)});`;
+      (document.head || document.documentElement).appendChild(s);
+      s.remove();
+    }
+    const send = (msg) => document.dispatchEvent(new CustomEvent(ch + ':req', { detail: JSON.stringify(msg) }));
+    return {
+      get alive() { return alive; },
+      // Synchronous on purpose: the page-side listener runs, and replies,
+      // inside dispatchEvent, so book stays readable like a plain object,
+      // exactly as with unsafeWindow.
+      state() {
+        inject();
+        syncReply = null;
+        send({ id: 0, op: 'state' });
+        return syncReply && syncReply.ok ? syncReply.result : null;
+      },
+      call(msg) {
+        inject();
+        return new Promise((resolve) => {
+          const id = ++seq;
+          pending.set(id, resolve);
+          send(Object.assign({ id }, msg));
+        });
+      },
+    };
+  })();
+
+  function getBook() {
+    const w = pageWin();
+    if (w) return w.book;
+    if (!useBridge) return undefined;
+    const b = pageBridge.state();
+    if (b) b.handleBookingServerSuccess = (resp) => pageBridge.call({ op: 'apply', resp }).then((m) => {
+      if (!m.ok) throw new Error(m.error || 'Ansicht nicht aktualisiert');
+    });
+    return b || undefined;
+  }
+  const bpid = () => { const b = getBook(); return b && b.bookingProcessId; };
+  const pageAccess = () => (pageWin() ? 'direkt' : !useBridge ? 'keiner'
+    : pageBridge.alive ? 'Bridge' : 'Bridge (keine Antwort)');
+
+  const loadCards = () => { try { return JSON.parse(store.get(STORE_KEY, '[]')); } catch { return []; } };
+  const saveCards = (c) => store.set(STORE_KEY, JSON.stringify(c));
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const safeParse = (t) => { try { return JSON.parse(t); } catch { return null; } };
   const mask = (c) => c.length > 6 ? c.slice(0, 4) + '…' + c.trim().slice(-4) : c;
   const eur = (n) => (n == null ? '—' : n.toFixed(2).replace('.', ',') + ' €');
+  // For anything user- or server-supplied that ends up in innerHTML: card
+  // names and codes come from saved/imported JSON (shared between people),
+  // error text from UCI's responses — none of it may become markup on a
+  // page that holds a live booking/payment session.
+  const esc = (v) => String(v).replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
   // The page mirrors every server response into book.priceRows, so basket
   // state is readable locally with no request at all.
@@ -400,35 +612,45 @@
   }
 
   // -------------------------------------------------------------------- api
+  // Always through the page's own jQuery, which adds the X-Requested-With
+  // header this endpoint requires (docs/API.md): directly, or via
+  // pageBridge. Resolves with the parsed response; rejects with an
+  // xhr-shaped { status, responseJSON, responseText }.
+  function ajaxPost(data) {
+    const w = pageWin();
+    if (w && w.$ && typeof w.$.ajax === 'function') {
+      return new Promise((resolve, reject) =>
+        w.$.ajax({ url: ENDPOINT, method: 'POST', data }).done((resp) => resolve(resp)).fail((xhr) => reject(xhr)));
+    }
+    if (!useBridge) return Promise.reject(new Error('jQuery nicht erreichbar'));
+    return pageBridge.call({ op: 'post', url: ENDPOINT, data }).then((m) => (m.ok ? m.result
+      : Promise.reject({ status: m.status, responseJSON: m.body, responseText: m.text || '' })));
+  }
+
   function post(data, label, rep, prog) {
-    const $ = getJQ();
-    if (!$) return Promise.reject(new Error('jQuery nicht erreichbar'));
     const t0 = performance.now();
     rep && rep.inflight(t0);
     console.log(TAG, '→', label, data);
-    return new Promise((resolve, reject) => {
-      $.ajax({ url: ENDPOINT, method: 'POST', data })
-        .done((resp) => {
-          const ms = Math.round(performance.now() - t0);
-          rep && rep.settled();
-          if (resp && resp.failure === 'true') {
-            console.warn(TAG, '←', label, ms + 'ms FAILURE', resp.errorCode);
-            return reject(apiError(resp, ms));
-          }
-          if (typeof resp.chfForBookingTransaction === 'number')
-            lastFee = resp.chfForBookingTransaction;
-          console.log(TAG, '←', label, ms + 'ms ok total=' + resp.fullAmount);
-          prog && prog.step();
-          resolve(resp);
-        })
-        .fail((xhr) => {
-          const ms = Math.round(performance.now() - t0);
-          rep && rep.settled();
-          const body = xhr.responseJSON || safeParse(xhr.responseText);
-          const err = body ? apiError(body, ms) : Object.assign(new Error('HTTP ' + xhr.status), { ms });
-          console.warn(TAG, '←', label, ms + 'ms ERROR', err.code || xhr.status, err.message);
-          reject(err);
-        });
+    return ajaxPost(data).then((resp) => {
+      const ms = Math.round(performance.now() - t0);
+      rep && rep.settled();
+      if (resp && resp.failure === 'true') {
+        console.warn(TAG, '←', label, ms + 'ms FAILURE', resp.errorCode);
+        throw apiError(resp, ms);
+      }
+      if (typeof resp.chfForBookingTransaction === 'number')
+        lastFee = resp.chfForBookingTransaction;
+      console.log(TAG, '←', label, ms + 'ms ok total=' + resp.fullAmount);
+      prog && prog.step();
+      return resp;
+    }, (xhr) => {
+      const ms = Math.round(performance.now() - t0);
+      rep && rep.settled();
+      if (xhr instanceof Error) throw xhr;
+      const body = xhr.responseJSON || safeParse(xhr.responseText);
+      const err = body ? apiError(body, ms) : Object.assign(new Error('HTTP ' + xhr.status), { ms });
+      console.warn(TAG, '←', label, ms + 'ms ERROR', err.code || xhr.status, err.message);
+      throw err;
     });
   }
 
@@ -662,6 +884,22 @@
     if (btn && btn.textContent.trim() !== 'Weiter') btn.textContent = 'Weiter';
   }
 
+  // The seat step's Weiter stays disabled until tickets and seats are
+  // picked, with nothing saying so. Read from the button's own disabled
+  // state every poll tick, so it can't disagree with what the site allows.
+  function updateStepHint() {
+    const btn = document.querySelector('#stepControl .btn-block');
+    if (!btn) return;
+    let hint = document.getElementById('uci-step-hint');
+    if (!hint) {
+      hint = document.createElement('span');
+      hint.id = 'uci-step-hint';
+      hint.textContent = 'Erst Tickets und Plätze wählen';
+      btn.insertAdjacentElement('afterend', hint);
+    }
+    hint.hidden = !btn.disabled;
+  }
+
   // Reads the "Gutscheine einlösen" panel's own content to add a "leer"
   // hint next to its (collapsed-by-default) header, so an empty account
   // doesn't need a click just to find out it's empty. This only reads —
@@ -689,35 +927,35 @@
 
   // Remembers which payment method (PayPal vs. Kreditkarte) was used last
   // and pre-selects it, so switching to a card once doesn't mean re-
-  // clicking past the site's own default every booking after. Buttons are
-  // matched by their visible label rather than an id/class, since neither
-  // is confirmed for this panel — low collision risk (nothing else on
-  // this step is plausibly labeled exactly "PayPal" or "Kreditkarte").
-  // Clicking whichever tab is already active is a harmless no-op for a
-  // standard Bootstrap tab/pill pair, so this doesn't need to first work
-  // out which one is currently selected — it only ever clicks once per
-  // page load (paymentMethodApplied), so it can't fight the user if they
-  // then pick something else themselves.
+  // clicking past the site's own default every booking after. Targets
+  // the two tab links by their confirmed ids (read from the live payment
+  // step) — NOT by text: the same section also holds "JETZT PAYPAL
+  // ZAHLUNG HINTERLEGEN" / "JETZT ZAHLUNG MIT KREDITKARTE HINTERLEGEN"
+  // buttons, which start registering a payment method. The old
+  // first-text-match only hit the tabs because they happen to come first
+  // in the markup. If either id is missing, nothing is clicked. Clicking
+  // an already-active Bootstrap tab is a no-op, and this only ever
+  // clicks once per page load (paymentMethodApplied), so it can't fight
+  // the user if they then pick something else.
   const PAYMENT_METHOD_KEY = 'uci_payment_method_v1';
   let paymentMethodApplied = false;
   function wirePaymentMethodMemory() {
-    const buttons = [...document.querySelectorAll('button, a')];
-    const paypal = buttons.find((el) => /paypal/i.test((el.textContent || '').trim()));
-    const cc = buttons.find((el) => /kreditkarte/i.test((el.textContent || '').trim()));
+    const paypal = document.getElementById('payment-type-paypal-tab');
+    const cc = document.getElementById('payment-tab-cc-tab');   // sic: "tab-cc", not "type-cc"
     if (!paypal || !cc) return;
 
     if (!paypal.dataset.uciWired) {
       paypal.dataset.uciWired = '1';
-      paypal.addEventListener('click', () => GM_setValue(PAYMENT_METHOD_KEY, 'paypal'));
+      paypal.addEventListener('click', () => store.set(PAYMENT_METHOD_KEY, 'paypal'));
     }
     if (!cc.dataset.uciWired) {
       cc.dataset.uciWired = '1';
-      cc.addEventListener('click', () => GM_setValue(PAYMENT_METHOD_KEY, 'kreditkarte'));
+      cc.addEventListener('click', () => store.set(PAYMENT_METHOD_KEY, 'kreditkarte'));
     }
 
     if (paymentMethodApplied) return;
     paymentMethodApplied = true;
-    const preferred = GM_getValue(PAYMENT_METHOD_KEY, null);
+    const preferred = store.get(PAYMENT_METHOD_KEY, null);
     if (preferred === 'paypal') paypal.click();
     else if (preferred === 'kreditkarte') cc.click();
   }
@@ -755,11 +993,16 @@
       #uci-batch .pname{font-weight:600;font-size:14px}
       #uci-batch .pcode{font-size:11px;color:#7c8899;font-family:ui-monospace,monospace;
         letter-spacing:.3px;margin-right:auto}
-      /* delete stays out of the way until you actually want it */
+      /* Always visible but quiet — it used to be opacity:0 until hover,
+         which on touch devices (no hover) meant an invisible but tappable
+         delete. Two-step: first click arms it ("löschen?"), second
+         deletes, see renderList(). */
       #uci-batch .del{cursor:pointer;color:#7c8899;font-size:15px;line-height:1;
-        opacity:0;transition:opacity .12s;padding:0 4px}
+        opacity:.45;transition:opacity .12s;padding:0 4px}
       #uci-batch .person:hover .del{opacity:1}
+      @media (hover:none){#uci-batch .del{opacity:1}}
       #uci-batch .del:hover{color:#ff9c9c}
+      #uci-batch .del.armed{opacity:1;color:#ff9c9c;font-size:12px;font-weight:600}
       #uci-batch .badge{font-size:11px;padding:2px 9px;border-radius:10px;white-space:nowrap;
         background:rgba(255,255,255,.12);color:#cfd6e0}
       #uci-batch .badge:empty{display:none}
@@ -782,10 +1025,16 @@
       #uci-batch .prog span:first-child{color:#cfd6e0;margin-right:12px}
       #uci-batch .hint{font-size:12px;color:#ffd77f;min-height:1em;margin-top:6px}
       #uci-batch .hint:empty{min-height:0}
+      /* No code ever adds an 'on' class to this box (checked: no
+         classList.add/toggle('on', ...) targets #uci-log anywhere), so the
+         old display:none/.log.on pair left this permanently hidden —
+         ui.log()/rep.log() were writing retry and error detail into a box
+         nothing could ever reveal. :empty is what actually keeps it out of
+         the way pre-run, matching .badge:empty/.detail:empty below. */
       #uci-batch .log{margin-top:8px;max-height:140px;overflow:auto;
         font-size:11px;line-height:1.45;font-family:ui-monospace,monospace;
-        background:rgba(0,0,0,.28);border-radius:5px;padding:7px;display:none}
-      #uci-batch .log.on{display:block}
+        background:rgba(0,0,0,.28);border-radius:5px;padding:7px}
+      #uci-batch .log:empty{display:none}
       #uci-batch .log .ok{color:#7fd6a0} #uci-batch .log .err{color:#ff9c9c}
       #uci-batch .log .warn{color:#ffd77f} #uci-batch .log .info{color:#9aa6b5}
       #uci-batch .addbox{padding:6px 2px}
@@ -806,6 +1055,7 @@
       #uci-batch .tiny{font-size:11.5px;color:#98a4b3}
       #uci-batch .mini{width:auto;max-width:none;flex:1;margin-top:4px;padding:5px;font-size:12px}
       #uci-batch .rowbtns{display:flex;gap:6px}
+      #uci-batch #uci-diag{margin-top:6px;font-family:ui-monospace,monospace;font-size:10.5px;color:#7c8899}
     </style>
     <div class="basket" id="uci-basket">Warenkorb wird gelesen…</div>
     <div id="uci-list"></div>
@@ -826,6 +1076,7 @@
         <button class="go mini" id="uci-import">Importieren</button>
       </div>
       <textarea id="uci-io" placeholder="JSON — zum Teilen kopieren, oder hier einfügen und auf Importieren klicken"></textarea>
+      <div class="tiny" id="uci-diag"></div>
     </details>`;
 
   let timer = null;
@@ -847,7 +1098,7 @@
     log: (m, cls) => {
       const box = panel.querySelector('#uci-log');
       box.insertAdjacentHTML('beforeend',
-        `<div class="${cls || 'info'}">${new Date().toTimeString().slice(0, 8)} ${m}</div>`);
+        `<div class="${cls || 'info'}">${new Date().toTimeString().slice(0, 8)} ${esc(m)}</div>`);
       box.scrollTop = box.scrollHeight;
     },
     set: (id, cls, text) => {
@@ -881,6 +1132,11 @@
   function updateBasket() {
     const el = panel.querySelector('#uci-basket');
     const b = basket();
+    // Without page access the basket can't be read at all, which is a
+    // different problem from an empty one, so it gets its own message.
+    if (!b && useBridge && !pageWin() && !pageBridge.alive) {
+      el.textContent = 'Buchungsdaten nicht lesbar — Seite neu laden.'; return;
+    }
     if (!b) { el.textContent = 'Noch kein Warenkorb — bitte zuerst Plätze wählen.'; return; }
     const parts = [`<b>${b.n}</b> Ticket${b.n === 1 ? '' : 's'}`];
     if (b.unlimited) parts.push(`<b>${b.unlimited}</b> mit Unlimited`);
@@ -908,6 +1164,7 @@
 
   // Selecting more cards than there are eligible seats can never work — the
   // extras would each burn a wasted probe before the server refuses them.
+  const seatsWord = (n) => (n === 1 ? '1 freier Platz' : `${n} freie Plätze`);
   function enforceCap() {
     const b = basket();
     const boxes = [...panel.querySelectorAll('#uci-list input[type=checkbox]')];
@@ -916,8 +1173,8 @@
     const checked = boxes.filter((c) => c.checked && !c.dataset.applied);
     boxes.forEach((c) => { c.disabled = !c.checked && !c.dataset.applied && checked.length >= limit; });
     ui.hint(checked.length > limit
-      ? `Nur ${limit} freie Plätze — bitte Auswahl reduzieren.`
-      : checked.length === limit && limit > 0 ? `Maximum erreicht (${limit} freie Plätze).` : '');
+      ? `Nur ${seatsWord(limit)} — bitte Auswahl reduzieren.`
+      : checked.length === limit && limit > 0 ? `Maximum erreicht (${seatsWord(limit)}).` : '');
   }
 
   // Cards already on the booking (reload, partial run, manual redemption)
@@ -959,7 +1216,7 @@
       el.innerHTML = `
         <input type="checkbox" data-id="${c.id}">
         <span class="pname"></span>
-        <span class="pcode">${mask(c.code)}</span>
+        <span class="pcode">${esc(mask(c.code))}</span>
         ${c.own ? '' : `<span class="del" data-del="${c.idx}" title="Karte löschen">×</span>`}
         <span class="retry" data-id="${c.id}" title="nur diese Karte erneut versuchen">↻</span>
         <span class="badge" data-id="${c.id}"></span>
@@ -969,7 +1226,14 @@
     });
 
     list.querySelectorAll('[data-del]').forEach((el) => {
+      let disarm = null;
       el.onclick = () => {
+        if (!el.classList.contains('armed')) {
+          el.classList.add('armed'); el.textContent = 'löschen?';
+          disarm = setTimeout(() => { el.classList.remove('armed'); el.textContent = '×'; }, 3000);
+          return;
+        }
+        clearTimeout(disarm);
         const cards = loadCards(); cards.splice(+el.dataset.del, 1); saveCards(cards);
         panel._rows = null; renderList();
       };
@@ -1085,11 +1349,16 @@
       console.warn(TAG, 'ticket container has zero rows right now — skipping render, keeping last state');
       return;
     }
+    // UCI only allows a family-adult ticket alongside a family-child one;
+    // its own UI just greys out the + with no reason given.
+    const blockedHint = (r) => r.plusBtn?.disabled && /^Fam\. Erw/i.test(r.label)
+      ? 'nur mit Fam. Kind' : '';
     panel.innerHTML = rows.map((r) => `
-      <div class="tk2-row">
+      <div class="tk2-row"${blockedHint(r) ? ` title="${blockedHint(r)}"` : ''}>
         <div class="tk2-info">
-          <span class="tk2-label">${r.label}</span>
-          <span class="tk2-price">${r.price}</span>
+          <span class="tk2-label">${esc(r.label)}</span>
+          <span class="tk2-price">${esc(r.price)}</span>
+          ${blockedHint(r) ? `<span class="tk2-hint">${blockedHint(r)}</span>` : ''}
         </div>
         <div class="tk2-stepper">
           <button class="tk2-btn minus" data-id="${r.id}" ${r.minusBtn?.disabled ? 'disabled' : ''} aria-label="weniger"></button>
@@ -1201,18 +1470,42 @@
       if (document.getElementById('uci-tickets') || ++earlyMountTries > 30) clearInterval(earlyMountPoll);
     }, 150);
 
+    // Every step runs isolated, and the next tick is scheduled first.
+    // Before 3.1.7 a single throw ended this loop for good. On iPhone that
+    // happened on the very first tick (GM_getValue in
+    // wirePaymentMethodMemory), so nothing after it ran again: no card list,
+    // and "Warenkorb wird gelesen…" forever. Errors now show once in the
+    // panel's log as well, since a phone has no console to check.
+    const reported = new Set();
+    const step = (name, fn) => {
+      try { return fn(); } catch (err) {
+        const msg = `${name}: ${(err && err.message) || err}`;
+        if (reported.has(msg)) return;
+        reported.add(msg);
+        console.error(TAG, msg, err);
+        ui.log('Interner Fehler — ' + msg, 'err');
+      }
+    };
     (function poll() {
-      if (!panel.isConnected) { mounted = false; tryMount(); }
-      mountTicketSelector();
-      annotateEmptyVoucherPanel();
-      wirePaymentMethodMemory();
-      ensureAlwaysExpanded('payment-type-uc-content');
-      ensureAlwaysExpanded('init-checkout-and-payment-type-select-content');
-      setupLeanPaymentExtras();
-      renameCheckoutButton();
-      ui.diag(`book:${getBook() ? 'ok' : '—'} $:${getJQ() ? 'ok' : '—'} bpid:${bpid() ? 'ok' : '—'}`);
-      const rebuilt = renderList();
-      if (!running) {
+      setTimeout(poll, 1500);
+      step('mount', () => { if (!panel.isConnected) { mounted = false; tryMount(); } });
+      step('tickets', mountTicketSelector);
+      step('voucherHint', annotateEmptyVoucherPanel);
+      step('stepHint', updateStepHint);
+      step('paymentMethod', wirePaymentMethodMemory);
+      step('expand', () => {
+        ensureAlwaysExpanded('payment-type-uc-content');
+        ensureAlwaysExpanded('init-checkout-and-payment-type-select-content');
+      });
+      step('extras', setupLeanPaymentExtras);
+      step('checkoutButton', renameCheckoutButton);
+      step('diag', () => {
+        const d = `book:${getBook() ? 'ok' : '—'} bpid:${bpid() ? 'ok' : '—'} Seite:${pageAccess()} Speicher:${store.kind}`;
+        ui.diag(d);
+        panel.querySelector('#uci-diag').textContent = d;
+      });
+      const rebuilt = step('cards', renderList);
+      if (!running) step('basket', () => {
         syncApplied();
         // A different seat count or an edited card list makes the previous
         // selection stale, so the defaults take over again.
@@ -1224,8 +1517,7 @@
           applyDefaults();
         }
         updateBasket();
-      }
-      setTimeout(poll, 1500);
+      });
     })();
   })();
   }
@@ -1274,7 +1566,7 @@
     })();
 
     const PREF_KEY = 'uci_browse_prefs_v1';
-    let prefs = { ovOnly: false, compact: true };
+    let prefs = { ovOnly: false };
     // Not persisted like prefs — a stale search silently reapplying on a
     // later visit would be more confusing than useful.
     let searchQuery = '';
@@ -1286,11 +1578,10 @@
     // re-collapse a filter that's still in effect.
     let searchOpen = false;
 
-    // "+N diese Woche" toggle on a film's row (see rowHTML) — which films
-    // currently have their other-day showtimes expanded inline. Keyed by
-    // title rather than a stable id (none exists), same key matchesQuery
-    // already filters on; ephemeral like searchQuery/searchOpen, not
-    // worth persisting across visits.
+    // "+N weitere" toggles (Woche and Weitere rows) — which rows currently
+    // show all their showtimes. Keyed by a tab-prefixed title rather than
+    // a stable id (none exists); ephemeral like searchQuery/searchOpen,
+    // not worth persisting across visits.
     let expandedFilms = new Set();
 
     function normalizeSearch(str) {
@@ -1301,15 +1592,15 @@
       return !q || normalizeSearch(title).includes(normalizeSearch(q));
     }
 
-    // "Kompakt" off (bigger posters, wrapping titles — the .ub-large
-    // class below) doesn't work well at phone width — confirmed against
-    // a real screenshot of the wrapped tab bar/checkbox layout. Read at
-    // render time rather than baked into prefs.compact itself, so a
-    // stored "off" preference from a desktop visit survives and reapplies
-    // correctly if this same profile is later opened on a wider screen.
-    const isNarrowViewport = () => window.matchMedia('(max-width: 640px)').matches;
-    try { prefs = Object.assign(prefs, JSON.parse(GM_getValue(PREF_KEY, '{}'))); } catch {}
-    const savePrefs = () => GM_setValue(PREF_KEY, JSON.stringify(prefs));
+    // Phone width — same 640px breakpoint as the CSS. Chip limits are
+    // sized to what fits on one/two lines there (measured in a 386px
+    // viewport: 4 week chips or 3 date chips per line), so render()
+    // re-runs when the window crosses it.
+    const narrowMQ = window.matchMedia('(max-width: 640px)');
+    const isNarrow = () => narrowMQ.matches;
+
+    try { prefs = Object.assign(prefs, JSON.parse(store.get(PREF_KEY, '{}'))); } catch {}
+    const savePrefs = () => store.set(PREF_KEY, JSON.stringify(prefs));
 
     // Human labels for the attribute-* classes on each showtime badge.
     // Anything not listed falls back to a title-cased version of the raw
@@ -1391,51 +1682,82 @@
       }).filter(Boolean);
 
       if (!showtimes.length) return null;
-      return { title, runtime, genre, fsk, poster, showtimes };
+      // The native card's title links to the film's own page (trailer,
+      // description) — kept so our poster+title can link there too.
+      const filmLink = card.querySelector('.film-container__description__text__eventtitle a');
+      const href = filmLink ? filmLink.getAttribute('href') : null;
+      return { title, runtime, genre, fsk, poster, href, showtimes };
     }
 
+    // The native page can carry the same film in more than one container
+    // (confirmed: ALWAYS LALISA appeared twice, in two sibling d-none
+    // wrappers, with identical performanceIds) — which rendered as two
+    // identical rows in "Weitere". Merged by title, the same key
+    // expandedFilms/matchesQuery already treat as unique, with showtimes
+    // deduped by perfId so a partial overlap still keeps every showing.
     function collectFilms(root) {
-      return [...(root || document).querySelectorAll('.film-container-wrapper')]
+      const byTitle = new Map();
+      [...(root || document).querySelectorAll('.film-container-wrapper')]
         .map(parseCard)
-        .filter(Boolean);
+        .filter(Boolean)
+        .forEach((film) => {
+          const seen = byTitle.get(film.title);
+          if (!seen) { byTitle.set(film.title, film); return; }
+          const perfIds = new Set(seen.showtimes.map((s) => s.perfId));
+          seen.showtimes.push(...film.showtimes.filter((s) => !perfIds.has(s.perfId)));
+          if (!seen.poster) seen.poster = film.poster;
+          if (!seen.href) seen.href = film.href;
+        });
+      return [...byTitle.values()];
     }
 
     // -------------------------------------------------------------- render
     const panel = document.createElement('div');
     panel.id = 'uci-browse';
 
-    function chipHTML(s) {
+    // One chip markup for every tab — only the visible label differs: the
+    // time alone on a day tab, date + time in Weitere, weekday + time in
+    // Woche (label may carry a .chip-day span; tip is the plain-text
+    // version for the tooltip). A real href, not a click handler, so
+    // Cmd/middle-click opens a booking in a new tab and chips are
+    // keyboard-focusable. Every original-language showing (OV, OmU, OmeU
+    // — the same set Nur OV keeps) gets .lang-orig, not just literal "OV".
+    function chipMarkup(s, label, tip = label, extraClass = '') {
       const tags = [...s.formats];
       if (s.special) tags.push(s.special);
       const premium = s.formats.length > 0;
-      const langClass = s.lang ? ' lang-' + s.lang.toLowerCase().replace(/[^a-z]/g, '') : '';
+      const href = `https://buchung.uci-kinowelt.de/?perf_id=${encodeURIComponent(s.perfId)}&site_id=${encodeURIComponent(s.siteId)}`;
       return `
-        <a class="chip${premium ? ' premium' : ''}${langClass}"
-           data-perf="${s.perfId}" data-site="${s.siteId}"
-           title="${s.time} · ${s.auditorium}${s.lang ? ' · ' + s.lang : ''}${tags.length ? ' · ' + tags.join(', ') : ''}">
-          <span class="chip-time">${s.time}</span>
+        <a class="chip${premium ? ' premium' : ''}${isOriginalLanguage(s.lang) ? ' lang-orig' : ''}${extraClass}"
+           href="${href}"
+           title="${tip} · ${s.auditorium}${s.lang ? ' · ' + s.lang : ''}${tags.length ? ' · ' + tags.join(', ') : ''}">
+          <span class="chip-time">${label}</span>
           ${(s.lang || tags.length) ? `<span class="chip-sub">${[s.lang, ...tags].filter(Boolean).join(' · ')}</span>` : ''}
         </a>`;
     }
 
-    // Same as chipHTML, but for a row that spans several dates rather than
-    // one day — the time alone is no longer enough to tell showings apart,
-    // so the date is folded into the same label. Year is only spelled out
-    // when it isn't the current one, so the common case stays compact.
+    const chipHTML = (s) => chipMarkup(s, s.time);
+
+    // For a row that spans several dates rather than one day — the time
+    // alone is no longer enough to tell showings apart, so the date is
+    // folded into the same label. Year is only spelled out when it isn't
+    // the current one, and then as two digits ("28.3.27"), so even those
+    // chips fit three to a line at phone width.
     function extraChipHTML(s, currentYear) {
-      const tags = [...s.formats];
-      if (s.special) tags.push(s.special);
-      const premium = s.formats.length > 0;
-      const langClass = s.lang ? ' lang-' + s.lang.toLowerCase().replace(/[^a-z]/g, '') : '';
       const dd = +s.date.slice(6, 8), mm = +s.date.slice(4, 6), yy = s.date.slice(0, 4);
-      const dateLabel = (+yy === currentYear) ? `${dd}.${mm}.` : `${dd}.${mm}.${yy}`;
-      return `
-        <a class="chip${premium ? ' premium' : ''}${langClass}"
-           data-perf="${s.perfId}" data-site="${s.siteId}"
-           title="${dateLabel} ${s.time} · ${s.auditorium}${s.lang ? ' · ' + s.lang : ''}${tags.length ? ' · ' + tags.join(', ') : ''}">
-          <span class="chip-time">${dateLabel} ${s.time}</span>
-          ${(s.lang || tags.length) ? `<span class="chip-sub">${[s.lang, ...tags].filter(Boolean).join(' · ')}</span>` : ''}
-        </a>`;
+      const dateLabel = (+yy === currentYear) ? `${dd}.${mm}.` : `${dd}.${mm}.${yy.slice(2)}`;
+      return chipMarkup(s, `<span class="chip-day">${dateLabel}</span> ${s.time}`, `${dateLabel} ${s.time}`, ' chip--date');
+    }
+
+    // Woche chips: weekday + time ("Fr 20:10", "Sa 17:00") — deliberately
+    // no "Heute"/"Morgen". Today and today+7 share a weekday, so the full
+    // date goes into the tooltip to tell them apart on hover.
+    const WEEKDAY = new Intl.DateTimeFormat('de-DE', { weekday: 'short' });
+    function weekChipHTML(s) {
+      const d = new Date(+s.date.slice(0, 4), +s.date.slice(4, 6) - 1, +s.date.slice(6, 8));
+      const wd = WEEKDAY.format(d);
+      return chipMarkup(s, `<span class="chip-day">${wd}</span> ${s.time}`,
+        `${wd} ${s.time}, ${s.date.slice(6, 8)}.${s.date.slice(4, 6)}.`);
     }
 
     // "Nur OV" is meant as "not dubbed into German", not literally the
@@ -1448,58 +1770,140 @@
       return !!lang && ['ov', 'omu', 'omeu'].includes(lang.toLowerCase());
     }
 
-    function rowHTML(film, dateStr, knownDates) {
-      const shown = film.showtimes
+    // Single source of truth for "does this film have anything to show on
+    // this date" — used by both rowHTML and the count/empty-tab logic in
+    // render(), which previously ignored Nur OV and so overcounted.
+    function showtimesOn(film, dateStr) {
+      return film.showtimes
         .filter((s) => s.date === dateStr)
-        .filter((s) => !prefs.ovOnly || isOriginalLanguage(s.lang))
+        .filter((s) => !prefs.ovOnly || isOriginalLanguage(s.lang));
+    }
+
+    // Title as a tooltip too — the compact row truncates with an ellipsis,
+    // and some titles only differ at the end (two "BTS WORLD TOUR
+    // 'ARIRANG' IN …" live viewings looked identical).
+    function titleHTML(title) {
+      return `<div class="film-title" title="${title.replace(/"/g, '&quot;')}">${title}</div>`;
+    }
+
+    const filmMeta = (film) => [film.runtime, film.fsk ? 'FSK ' + film.fsk : null, film.genre].filter(Boolean).join(' · ');
+
+    // Poster + title + meta, linked to the film's own page when known.
+    // Shared by every row type. .ub-info, not .film-info: UCI's own
+    // stylesheet styles .film-info (dark box, padding, rounded corners),
+    // which leaked onto ours as an unintended box-in-a-box.
+    function filmHeadHTML(f, meta) {
+      const inner = `
+          ${f.poster ? `<img class="film-thumb" src="${f.poster}" loading="lazy" alt="">` : '<div class="film-thumb film-thumb--empty"></div>'}
+          <div class="ub-info">
+            ${titleHTML(f.title)}
+            <div class="film-meta">${meta}</div>
+          </div>`;
+      return f.href
+        ? `<a class="ub-film-link" href="${f.href.replace(/"/g, '&quot;')}">${inner}</a>`
+        : `<div class="ub-film-link">${inner}</div>`;
+    }
+
+    // Past this many, a row's chips are cut off behind a "+N weitere"
+    // toggle — some far-future event runs carry 40+ dates, which turned a
+    // single row in "Weitere" into a ~350px wall of chips.
+    const extraChipLimit = () => (isNarrow() ? 6 : 12);   // phone: 2 lines of 3
+
+    // Day tab row: just that day's showtimes. No "+N diese Woche" any
+    // more — the Woche tab now covers "when else does this play?".
+    function rowHTML(film, dateStr) {
+      const shown = showtimesOn(film, dateStr)
         .sort((a, b) => a.time.localeCompare(b.time));
       if (!shown.length) return '';
-
-      // The actual complaint this solves: today's showtimes are all
-      // visible above, but none of them work — these are this same
-      // film's OTHER showtimes within the 8-day tab window (not the
-      // far-future "Weitere" bucket, that's a separate concern), so
-      // switching days isn't required just to check whether a better
-      // time exists elsewhere this week.
-      const otherShown = film.showtimes
-        .filter((s) => s.date !== dateStr && knownDates.has(s.date))
-        .filter((s) => !prefs.ovOnly || isOriginalLanguage(s.lang))
-        .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
-      const expanded = expandedFilms.has(film.title);
-      const currentYear = new Date().getFullYear();
-      const moreHTML = otherShown.length
-        ? `<button type="button" class="ub-more-toggle" data-film="${film.title.replace(/"/g, '&quot;')}">
-             ${expanded ? 'weniger' : '+' + otherShown.length + ' diese Woche'}
-           </button>${expanded ? otherShown.map((s) => extraChipHTML(s, currentYear)).join('') : ''}`
-        : '';
-
       return `
         <div class="film-row">
-          ${film.poster ? `<img class="film-thumb" src="${film.poster}" loading="lazy" alt="">` : '<div class="film-thumb film-thumb--empty"></div>'}
-          <div class="film-info">
-            <div class="film-title">${film.title}</div>
-            <div class="film-meta">${[film.runtime, film.fsk ? 'FSK ' + film.fsk : null, film.genre].filter(Boolean).join(' · ')}</div>
-          </div>
-          <div class="film-chips">${shown.map(chipHTML).join('')}${moreHTML}</div>
+          ${filmHeadHTML(film, filmMeta(film))}
+          <div class="film-chips">${shown.map(chipHTML).join('')}</div>
         </div>`;
     }
 
     // One row per film, chips spanning every showtime in the given set
     // (which may cross several dates), sorted chronologically.
-    function extraRowHTML(film, showtimes) {
-      const shown = showtimes
+    function extraRowHTML(film, showtimes, sectionLabel) {
+      const all = showtimes
         .filter((s) => !prefs.ovOnly || isOriginalLanguage(s.lang))
         .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
-      if (!shown.length) return '';
+      if (!all.length) return '';
       const currentYear = new Date().getFullYear();
+
+      // Same expandedFilms set and .ub-more-toggle handler as Woche, with a
+      // section-scoped key so expanding a film in one horizon doesn't
+      // expand it in another (or in Woche).
+      const key = `extra:${sectionLabel}:${film.title}`;
+      const expanded = expandedFilms.has(key);
+      const limit = extraChipLimit();
+      const overflow = all.length - limit;
+      const shown = (overflow > 0 && !expanded) ? all.slice(0, limit) : all;
+      const moreHTML = overflow > 0
+        ? `<button type="button" class="ub-more-toggle" data-film="${key.replace(/"/g, '&quot;')}">
+             ${expanded ? 'weniger' : '+' + overflow + ' weitere'}
+           </button>`
+        : '';
       return `
         <div class="film-row">
-          ${film.poster ? `<img class="film-thumb" src="${film.poster}" loading="lazy" alt="">` : '<div class="film-thumb film-thumb--empty"></div>'}
-          <div class="film-info">
-            <div class="film-title">${film.title}</div>
-            <div class="film-meta">${[film.runtime, film.fsk ? 'FSK ' + film.fsk : null, film.genre].filter(Boolean).join(' · ')}</div>
-          </div>
-          <div class="film-chips">${shown.map((s) => extraChipHTML(s, currentYear)).join('')}</div>
+          ${filmHeadHTML(film, filmMeta(film))}
+          <div class="film-chips">${shown.map((s) => extraChipHTML(s, currentYear)).join('')}${moreHTML}</div>
+        </div>`;
+    }
+
+    // Woche — the default tab: every film with a showing anywhere in the
+    // 8-day window, its next showings in time order (as many as fit on one
+    // line) and the rest behind the same "+N weitere" toggle as Weitere,
+    // so a whole week is visible without clicking through the day tabs.
+    // How many fit comes from the measured width of a chips line, not a
+    // fixed count per breakpoint. iPhones run from 375px to 440px wide, and
+    // 4 pills plus "+N weitere" fit a 390px one (322px line, measured) but
+    // not a 375px one, where the link would wrap onto a line of its own.
+    // CHIP_W/CHIP_GAP must match the .chip/.film-chips CSS.
+    const CHIP_W = 60, CHIP_GAP = 5;
+    // "+N weitere" at 11px: 54.9px with one digit, 61.3px with two
+    // (measured), plus 2px slack for font rendering differences.
+    const moreLinkW = (n) => (n > 9 ? 64 : 57);
+    let chipsLineW = 0;   // measured after each render()
+    // Before the first measurement: the line widths measured at 390px and
+    // at desktop width.
+    const lineW = () => chipsLineW || (isNarrow() ? 322 : 644);
+    const fitsLine = (n, more) =>
+      n * CHIP_W + (n - 1) * CHIP_GAP + (more ? CHIP_GAP + moreLinkW(more) : 0) <= lineW();
+    function weekChipLimit(total) {
+      if (fitsLine(total, 0)) return total;
+      let n = 1;
+      while (n + 1 < total && fitsLine(n + 1, total - n - 1)) n++;
+      return n;
+    }
+
+    function weekShowtimes(film, days) {
+      const now = new Date();
+      const nowHM = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+      return days.flatMap((d) => showtimesOn(film, d.str))
+        // Already-started showings from today are useless here even if
+        // the native page still lists them.
+        .filter((s) => !(s.date === days[0].str && s.time < nowHM))
+        .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+    }
+
+    function weekRowHTML(film, days) {
+      const all = weekShowtimes(film, days);
+      if (!all.length) return '';
+      const key = `woche:${film.title}`;
+      const expanded = expandedFilms.has(key);
+      const limit = weekChipLimit(all.length);
+      const overflow = all.length - limit;
+      const shown = (overflow > 0 && !expanded) ? all.slice(0, limit) : all;
+      const moreHTML = overflow > 0
+        ? `<button type="button" class="ub-more-toggle" data-film="${key.replace(/"/g, '&quot;')}">
+             ${expanded ? 'weniger' : '+' + overflow + ' weitere'}
+           </button>`
+        : '';
+      return `
+        <div class="film-row">
+          ${filmHeadHTML(film, filmMeta(film))}
+          <div class="film-chips">${shown.map(weekChipHTML).join('')}${moreHTML}</div>
         </div>`;
     }
 
@@ -1542,13 +1946,16 @@
       let firstOpen = true;
       return sections.map((sec) => {
         if (!sec.items.length) return '';
-        const rows = sec.items.map(({ film, showtimes }) => extraRowHTML(film, showtimes)).filter(Boolean).join('');
-        if (!rows) return '';
+        // Counted from rendered rows, not sec.items — Nur OV can drop a
+        // film from a section entirely, and the header shouldn't count it.
+        const rowList = sec.items.map(({ film, showtimes }) => extraRowHTML(film, showtimes, sec.label)).filter(Boolean);
+        if (!rowList.length) return '';
+        const rows = rowList.join('');
         const open = query ? true : firstOpen;
         if (!query) firstOpen = false;
         return `<details class="extra-date-group"${open ? ' open' : ''}>
           <summary class="extra-date-head">${sec.label}
-            <span class="extra-date-count">${sec.items.length} Film${sec.items.length === 1 ? '' : 'e'}</span>
+            <span class="extra-date-count">${rowList.length} Film${rowList.length === 1 ? '' : 'e'}</span>
           </summary>
           ${rows}
         </details>`;
@@ -1608,13 +2015,7 @@
         : `<span class="cs-buy-btn cs-buy-btn--disabled">Buchen</span>`;
       return `
         <div class="film-row cs-row">
-          <a class="cs-link" href="${f.href}">
-            ${f.poster ? `<img class="film-thumb" src="${f.poster}" loading="lazy" alt="">` : '<div class="film-thumb film-thumb--empty"></div>'}
-            <div class="film-info">
-              <div class="film-title">${f.title}</div>
-              <div class="film-meta">${dateText}</div>
-            </div>
-          </a>
+          ${filmHeadHTML(f, dateText)}
           <div class="film-chips">${action}</div>
         </div>`;
     }
@@ -1665,32 +2066,53 @@
       });
       const knownDates = new Set(days.map((d) => d.str));
 
-      if (!panel.dataset.selected) panel.dataset.selected = days[0].str;
+      if (!panel.dataset.selected) panel.dataset.selected = 'woche';
       const sel = panel.dataset.selected;
 
       const extraHTML = extraDatesHTML(visibleFilms, knownDates);
-      const tabsHTML = days.map((d) =>
-        `<button class="ub-tab${d.str === sel ? ' active' : ''}" data-date="${d.str}">${d.label}</button>`
+      // Whether the Weitere tab exists at all is decided from the full,
+      // unfiltered programme — not from extraHTML, which is search- and
+      // OV-filtered. Otherwise typing a query with no far-future match
+      // removed the tab mid-search, shifting Demnächst left under the
+      // cursor (confirmed: a click aimed at Weitere opened Demnächst).
+      const hasExtra = films.some((f) => f.showtimes.some((s) => !knownDates.has(s.date)));
+      // Dimmed, not hidden or disabled: the last day or two of the window
+      // is often still unpublished, and a tab that's visibly empty saves a
+      // pointless click without making the tab bar shift around. Ignores
+      // the search query on purpose so tabs don't flicker while typing.
+      const emptyDays = new Set(days.map((d) => d.str)
+        .filter((str) => !films.some((f) => showtimesOn(f, str).length)));
+      const tabsHTML = `<button class="ub-tab${sel === 'woche' ? ' active' : ''}" data-date="woche">Woche</button>`
+        + days.map((d) =>
+        `<button class="ub-tab${d.str === sel ? ' active' : ''}${emptyDays.has(d.str) ? ' ub-tab--empty' : ''}" data-date="${d.str}"${emptyDays.has(d.str) ? ' title="Noch keine Vorstellungen"' : ''}>${d.label}</button>`
       ).join('')
-        + (extraHTML ? `<button class="ub-tab${sel === 'extra' ? ' active' : ''}" data-date="extra">Weitere</button>` : '')
+        + (hasExtra ? `<button class="ub-tab${sel === 'extra' ? ' active' : ''}" data-date="extra">Weitere</button>` : '')
         + `<button class="ub-tab${sel === 'demnaechst' ? ' active' : ''}" data-date="demnaechst">Demnächst</button>`;
 
-      const body = sel === 'extra' ? extraHTML
+      const body = sel === 'woche' ? visibleFilms.map((f) => weekRowHTML(f, days)).filter(Boolean).join('')
+        : sel === 'extra' ? extraHTML
         : sel === 'demnaechst' ? demnaechstBodyHTML()
-        : visibleFilms.map((f) => rowHTML(f, sel, knownDates)).filter(Boolean).join('');
+        : visibleFilms.map((f) => rowHTML(f, sel)).filter(Boolean).join('');
 
       const shownCount = (sel === 'extra' || sel === 'demnaechst') ? null
-        : visibleFilms.filter((f) => f.showtimes.some((s) => s.date === sel)).length;
+        : sel === 'woche' ? visibleFilms.filter((f) => weekShowtimes(f, days).length).length
+        : visibleFilms.filter((f) => showtimesOn(f, sel).length).length;
 
       const query = searchQuery.trim();
       const emptyMsg = query
         ? `Keine Treffer für „${query}“.`
-        : 'Keine Vorstellungen an diesem Tag' + (prefs.ovOnly ? ' in OV' : '') + '.';
+        : (sel === 'extra' ? 'Keine weiteren Vorstellungen'
+          : sel === 'woche' ? 'Keine Vorstellungen diese Woche'
+          : 'Keine Vorstellungen an diesem Tag')
+          + (prefs.ovOnly ? ' in OV' : '') + '.';
 
       // A full innerHTML rebuild on every keystroke would otherwise kick
       // focus out of the search field after the first character typed —
       // capture position before rebuilding, restore it after.
       const searchHadFocus = document.activeElement && document.activeElement.id === 'ub-search';
+      // Phone tab bar is one horizontally scrolling row (see CSS); the
+      // rebuild below would reset it to the start on every click.
+      const tabsScroll = panel.querySelector('.ub-tabs')?.scrollLeft || 0;
       const searchSelStart = searchHadFocus ? document.activeElement.selectionStart : null;
       const searchSelEnd = searchHadFocus ? document.activeElement.selectionEnd : null;
 
@@ -1698,7 +2120,6 @@
         <div class="ub-bar">
           <div class="ub-tabs">${tabsHTML}</div>
           <label class="ub-ov"><input type="checkbox" id="ub-ovonly" ${prefs.ovOnly ? 'checked' : ''}> Nur OV</label>
-          <label class="ub-ov"><input type="checkbox" id="ub-compact" ${prefs.compact ? 'checked' : ''}> Kompakt</label>
           <button type="button" class="ub-search-toggle" id="ub-search-toggle" aria-label="Suche öffnen">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                  stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/>
@@ -1707,16 +2128,33 @@
         </div>
         <div class="ub-search-row">
           <input type="search" id="ub-search" placeholder="Film suchen…" value="${searchQuery.replace(/"/g, '&quot;')}">
-          <button type="button" class="ub-search-close" id="ub-search-close" aria-label="Suche schließen">✕</button>
+          <button type="button" class="ub-search-close" id="ub-search-close" aria-label="Suche löschen" title="Suche löschen">✕</button>
         </div>
         ${shownCount !== null ? `<div class="ub-count">${shownCount} Film${shownCount === 1 ? '' : 'e'}</div>` : ''}
         <div class="ub-list">${body || `<div class="ub-empty">${emptyMsg}</div>`}</div>
         <div class="ub-foot"><span id="ub-native-toggle">Original-Ansicht zeigen</span></div>`;
-      // Lives on the panel itself (same pattern as ub-large below), not on
+      // Lives on the panel itself, not on
       // .ub-search-row — the trigger button now sits in .ub-bar, a sibling
       // of that row rather than a descendant, so a class scoped to the row
       // alone couldn't reach it.
       panel.classList.toggle('ub-search-open', searchOpen || !!searchQuery.trim());
+      // Drives the desktop ✕ (see CSS) — Chrome's own type=search cancel
+      // button is hidden because it only fires when the field already has
+      // focus at mousedown, and every render() replaces the input with an
+      // unfocused one: confirmed via event logging, a first click on it
+      // produced mousedown/mouseup/click and no input event at all.
+      panel.classList.toggle('ub-has-query', !!searchQuery);
+
+      const tabStrip = panel.querySelector('.ub-tabs');
+      tabStrip.scrollLeft = tabsScroll;
+      // Keep the selected tab in view (e.g. Demnächst, at the far end).
+      // Manual math, not scrollIntoView(), which would also scroll the page.
+      const activeTab = tabStrip.querySelector('.ub-tab.active');
+      if (activeTab && tabStrip.scrollWidth > tabStrip.clientWidth) {
+        const l = activeTab.offsetLeft - tabStrip.offsetLeft, r = l + activeTab.offsetWidth;
+        if (l < tabStrip.scrollLeft) tabStrip.scrollLeft = l - 8;
+        else if (r > tabStrip.scrollLeft + tabStrip.clientWidth) tabStrip.scrollLeft = r - tabStrip.clientWidth + 8;
+      }
 
       panel.querySelectorAll('.ub-tab').forEach((b) => {
         b.onclick = () => {
@@ -1726,13 +2164,11 @@
         };
       });
       panel.querySelector('#ub-ovonly').onchange = (e) => { prefs.ovOnly = e.target.checked; savePrefs(); render(); };
-      panel.querySelector('#ub-compact').onchange = (e) => { prefs.compact = e.target.checked; savePrefs(); render(); };
       panel.querySelector('#ub-search').oninput = (e) => { searchQuery = e.target.value; render(); };
-      // Only relevant on mobile (see CSS — the toggle/close buttons are
-      // display:none above 640px, so these clicks can't fire there), but
-      // wired unconditionally rather than gated on isNarrowViewport():
-      // harmless on desktop since the buttons are never visible/clickable
-      // there, and this avoids silently going stale if a window gets
+      // The toggle is mobile-only (display:none above 640px); the close
+      // button doubles as the desktop clear ✕ whenever there's a query
+      // (see .ub-has-query in CSS). Both wired unconditionally rather than
+      // gated on viewport width, so nothing goes stale if a window gets
       // resized after mount.
       panel.querySelector('#ub-search-toggle').onclick = () => {
         searchOpen = true; render();
@@ -1749,7 +2185,6 @@
         el.focus();
         el.setSelectionRange(searchSelStart, searchSelEnd);
       }
-      panel.classList.toggle('ub-large', !prefs.compact && !isNarrowViewport());
       panel.querySelectorAll('.ub-more-toggle').forEach((b) => {
         b.onclick = () => {
           const title = b.dataset.film;
@@ -1758,15 +2193,23 @@
           render();
         };
       });
-      panel.querySelectorAll('.chip').forEach((c) => {
-        c.onclick = (e) => {
-          e.preventDefault();
-          location.href = `https://buchung.uci-kinowelt.de/?perf_id=${encodeURIComponent(c.dataset.perf)}&site_id=${encodeURIComponent(c.dataset.site)}`;
-        };
-      });
       const nt = panel.querySelector('#ub-native-toggle');
       if (nt) nt.onclick = () => setNativeVisible(true);
+
+      // Re-measure the chips line (see weekChipLimit). If this render went
+      // by a guess or a stale width (first render, rotation, resize),
+      // render once more with the real one. Only once, so a width that
+      // changes again in response (e.g. a scrollbar appearing) can't loop.
+      const line = panel.querySelector('.film-row:not(.cs-row) .film-chips');
+      const w = line ? line.getBoundingClientRect().width : 0;
+      if (w && Math.abs(w - chipsLineW) > 0.5 && !remeasured) {
+        chipsLineW = w;
+        remeasured = true;
+        render();
+        remeasured = false;
+      }
     }
+    let remeasured = false;
 
     function setNativeVisible(on) {
       const grid = document.querySelector('.movies-grid');
@@ -1790,10 +2233,14 @@
       #uci-browse .ub-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
         border-bottom:1px solid rgba(255,255,255,.1);padding-bottom:10px;margin-bottom:8px}
       #uci-browse .ub-tabs{display:flex;gap:4px;flex-wrap:wrap;flex:1}
+      /* 8px side padding, not 10: with the Woche tab added, 10px pushed
+         the 11 tabs to 814px, past the room left beside the checkbox(es)
+         in the 960px panel, wrapping Demnächst onto a 2nd row. */
       #uci-browse .ub-tab{background:rgba(255,255,255,.06);border:1px solid transparent;
-        color:#cfd6e0;border-radius:6px;padding:5px 10px;font-size:12.5px;cursor:pointer}
+        color:#cfd6e0;border-radius:6px;padding:5px 8px;font-size:12.5px;cursor:pointer}
       #uci-browse .ub-tab:hover{background:rgba(255,255,255,.12)}
       #uci-browse .ub-tab.active{background:#fff101;color:#000;font-weight:700}
+      #uci-browse .ub-tab--empty:not(.active){color:#5c6673;background:rgba(255,255,255,.03)}
       #uci-browse .ub-ov{display:flex;align-items:center;gap:6px;font-size:12.5px;
         color:#cfd6e0;white-space:nowrap;accent-color:#fff101}
 
@@ -1808,12 +2255,12 @@
            means whatever comes after it in the flex-wrap flow starts
            fresh on the next line instead of sharing a row with it. */
         #uci-browse .ub-tabs { flex: 1 1 100%; }
-        /* Kompakt off doesn't work well at phone width (see
-           isNarrowViewport() in render()) — hidden here rather than
-           removed from the template, so the checkbox/stored preference
-           are untouched for anyone opening this same profile on a wider
-           screen later. */
-        #uci-browse label.ub-ov:has(#ub-compact) { display: none; }
+        /* One swipeable row instead of three wrapped ones (measured: the
+           11 tabs took 3 rows / 149px before the first film at 386px). */
+        #uci-browse .ub-tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
+          -webkit-overflow-scrolling: touch; margin: 0 -14px; padding: 0 14px; }
+        #uci-browse .ub-tabs::-webkit-scrollbar { display: none; }
+        #uci-browse .ub-tab { flex: 0 0 auto; white-space: nowrap; }
       }
 
       #uci-browse .ub-search-row{margin-bottom:8px;display:flex;align-items:center;gap:8px}
@@ -1822,10 +2269,18 @@
         padding:7px 10px}
       #uci-browse #ub-search::placeholder{color:#6b7684}
       #uci-browse #ub-search:focus{outline:none;border-color:rgba(255,241,1,.5)}
-      #uci-browse #ub-search::-webkit-search-cancel-button{filter:invert(1);opacity:.6;cursor:pointer}
-      /* Both hidden by default — desktop keeps the plain always-visible
-         input exactly as before, with no icon and nothing to toggle. */
+      /* Native cancel button replaced by .ub-search-close — see the
+         .ub-has-query toggle in render() for why it never worked here. */
+      #uci-browse #ub-search::-webkit-search-cancel-button{-webkit-appearance:none;display:none}
+      /* Hidden by default — desktop keeps the plain always-visible input
+         with no icon and nothing to toggle; the ✕ only appears once
+         there's something to clear. */
       #uci-browse .ub-search-toggle,#uci-browse .ub-search-close{display:none}
+      #uci-browse .ub-search-close{align-items:center;justify-content:center;flex:0 0 auto;
+        background:none;border:none;color:#8b97a8;font-size:15px;cursor:pointer;
+        padding:4px 6px;min-height:0}
+      #uci-browse .ub-search-close:hover{color:#fff}
+      #uci-browse.ub-has-query .ub-search-close{display:flex}
 
       /* A permanent search row costs a full line of vertical space that
          matters more on a short phone screen than on desktop — collapsed
@@ -1842,9 +2297,7 @@
         #uci-browse .ub-search-toggle svg{width:15px;height:15px}
         #uci-browse .ub-search-row{display:none}
         #uci-browse #ub-search{flex:1 1 auto;min-width:0}
-        #uci-browse .ub-search-close{
-          display:flex;flex:0 0 auto;background:none;border:none;
-          color:#8b97a8;font-size:15px;cursor:pointer;padding:4px;min-height:0}
+        #uci-browse .ub-search-close{display:flex}
         /* Set on the panel itself, not the row — see render(). Whenever
            it's open, hide the trigger (it lives in .ub-bar, a sibling of
            .ub-search-row, so this can't be a plain descendant rule off
@@ -1854,58 +2307,77 @@
       }
       #uci-browse .ub-count{font-size:11.5px;color:#8b97a8;margin-bottom:6px}
       #uci-browse .ub-list{display:flex;flex-direction:column}
-      #uci-browse .film-row{display:flex;align-items:center;gap:12px;padding:8px 2px;
+      /* Top-aligned, not centered: expanding "+N weitere" grows the chips
+         downward, and a centered row slid the poster/title down with it.
+         .film-chips' min-height (= the compact thumb) + align-content
+         keeps a single chip line centered on the poster exactly as before. */
+      #uci-browse .film-row{display:flex;align-items:flex-start;gap:12px;padding:8px 2px;
         border-bottom:1px solid rgba(255,255,255,.07)}
       #uci-browse .film-row:hover{background:rgba(255,255,255,.03)}
       #uci-browse .film-thumb{width:40px;height:57px;object-fit:cover;border-radius:4px;flex:0 0 auto;
-        background:rgba(255,255,255,.08);transition:width .15s,height .15s}
-      #uci-browse .film-thumb--empty{}
-      #uci-browse .film-info{flex:0 0 auto;width:220px;min-width:0}
-      #uci-browse .film-title{font-weight:600;font-size:13.5px;white-space:nowrap;
-        overflow:hidden;text-overflow:ellipsis}
+        background:rgba(255,255,255,.08)}
+      /* Poster+title block — a link to the film's page where one exists.
+         Text centered on the poster; underline on hover is the only cue,
+         so the row doesn't gain another visual element. */
+      #uci-browse .ub-film-link{display:flex;align-items:center;gap:12px;flex:0 0 auto;
+        min-width:0;color:inherit;text-decoration:none}
+      #uci-browse a.ub-film-link:hover .film-title{text-decoration:underline}
+      #uci-browse .ub-info{flex:0 0 auto;width:220px;min-width:0}
+      /* Two lines, then ellipsis — a single nowrap line made titles that
+         only differ at the end ("BTS WORLD TOUR 'ARIRANG' IN BUENOS AIRES"
+         vs "… IN SÃO PAULO") render identically. Two lines still fit
+         beside the 57px compact thumbnail along with .film-meta. */
+      #uci-browse .film-title{font-weight:600;font-size:13.5px;line-height:1.3;
+        overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
       #uci-browse .film-meta{font-size:11px;color:#8b97a8;white-space:nowrap;
         overflow:hidden;text-overflow:ellipsis}
-      #uci-browse .film-chips{display:flex;flex-wrap:wrap;gap:6px;flex:1}
+      #uci-browse .film-chips{display:flex;flex-wrap:wrap;gap:5px;flex:1;
+        min-height:57px;align-items:center;align-content:center}
 
-      /* "Kompakt" off: posters at 2x, as requested. Rows switch to
-         top-alignment so the (much taller) poster doesn't visually center
-         two lines of text against it — and title/genre get room to wrap
-         onto a second line rather than truncating. */
-      #uci-browse.ub-large .film-row{align-items:flex-start;padding:12px 2px;gap:14px}
-      #uci-browse.ub-large .film-thumb{width:80px;height:114px}
-      #uci-browse.ub-large .film-info{width:260px;padding-top:2px}
-      #uci-browse.ub-large .film-title{white-space:normal;font-size:14.5px}
-      #uci-browse.ub-large .film-meta{white-space:normal}
-      #uci-browse.ub-large .film-chips{padding-top:2px}
+      /* Fixed size, not content-sized: every chip reserves the second
+         (lang/format) line and shares one width, so a row reads as an even
+         grid instead of "OmU · IMAX" chips towering over bare times.
+         60px is the smallest that still fits every label at these fonts
+         (measured in a 390px viewport: "Sa 22:00" 49px, "OV · ScreenX"
+         52px of a 52px content box), so a 390px iPhone fits 4 pills plus
+         "+N weitere" per line (was 3 at 76x38). width and the 5px gap are
+         mirrored in CHIP_W/CHIP_GAP (weekChipLimit). Weitere's date chips
+         need 78px ("28.3.27 17:00"), hence their own wider .chip--date.
+         Anything longer ellipsizes — the full text is in the tooltip. */
       #uci-browse .chip{display:flex;flex-direction:column;align-items:center;justify-content:center;
-        min-width:52px;padding:4px 8px;border-radius:6px;background:rgba(255,255,255,.08);
+        box-sizing:border-box;width:60px;min-height:34px;overflow:hidden;
+        padding:3px;border-radius:6px;background:rgba(255,255,255,.08);
         border:1px solid rgba(255,255,255,.12);text-decoration:none;cursor:pointer;line-height:1.25}
       #uci-browse .chip:hover{background:rgba(255,255,255,.16)}
-      #uci-browse .chip-time{font-size:12.5px;font-weight:700;color:#fff}
-      #uci-browse .chip-sub{font-size:9.5px;color:#a9b4c2;white-space:nowrap}
+      #uci-browse .chip.chip--date{width:80px}
+      #uci-browse .chip-time,#uci-browse .chip-sub{max-width:100%;white-space:nowrap;
+        overflow:hidden;text-overflow:ellipsis}
+      #uci-browse .chip-time{font-size:11.5px;font-weight:700;color:#fff}
+      #uci-browse .chip-sub{font-size:9px;color:#a9b4c2}
       #uci-browse .chip.premium{border-color:rgba(255,241,1,.5)}
-      #uci-browse .chip.lang-ov{background:rgba(79,157,222,.16);border-color:rgba(79,157,222,.4)}
-      #uci-browse .chip.lang-ov .chip-sub{color:#8fc4f0}
+      #uci-browse .chip.lang-orig{background:rgba(79,157,222,.16);border-color:rgba(79,157,222,.4)}
+      #uci-browse .chip.lang-orig .chip-sub{color:#8fc4f0}
+      /* Weekday/date prefix de-emphasized so the times are what the eye
+         scans along a row; translucent white so it reads on both the grey
+         and the blue (original-language) chip backgrounds. */
+      #uci-browse .chip-day{font-weight:500;color:rgba(255,255,255,.55)}
 
-      /* "+N diese Woche" — deliberately text, not another chip: it isn't
-         a showtime itself, and matching the chip shape/size would make it
-         look like one at a glance, undermining the whole point of "these
-         are on a different day." */
+      /* "+N weitere" — deliberately text, not another chip: it isn't a
+         showtime itself, and matching the chip shape/size would make it
+         look like one at a glance. */
       #uci-browse .ub-more-toggle{
         align-self:center;background:none;border:none;color:#8fc4f0;
-        font-size:11.5px;font-weight:600;cursor:pointer;padding:4px 2px;
+        font-size:11px;font-weight:600;cursor:pointer;padding:4px 1px;
         white-space:nowrap;min-height:0}
       #uci-browse .ub-more-toggle:hover{color:#b3dcff;text-decoration:underline}
 
       /* Demnächst rows: no showtimes to fit, so give the title the room
          the other tabs can't spare, instead of the fixed-width truncation
          used where the chips area needs to stay wide for many showtimes. */
-      #uci-browse .film-row.cs-row .film-info{width:auto;flex:1 1 auto;min-width:0}
-      #uci-browse .film-row.cs-row .film-title{white-space:normal;overflow:visible;text-overflow:clip}
+      #uci-browse .film-row.cs-row .ub-film-link{flex:1 1 auto}
+      #uci-browse .film-row.cs-row .ub-info{width:auto;flex:1 1 auto;min-width:0}
+      #uci-browse .film-row.cs-row .film-title{display:block;overflow:visible}
       #uci-browse .film-row.cs-row .film-chips{flex:0 0 auto}
-      #uci-browse .cs-link{display:flex;align-items:center;gap:12px;flex:1;min-width:0;
-        color:inherit;text-decoration:none}
-      #uci-browse.ub-large .cs-link{align-items:flex-start}
       #uci-browse .cs-buy-btn{display:inline-block;padding:7px 16px;border-radius:6px;
         background:#4f9dde;color:#fff;font-weight:700;font-size:13px;text-decoration:none;
         white-space:nowrap;flex:0 0 auto}
@@ -1915,41 +2387,30 @@
       #uci-browse .cs-buy-btn--disabled:hover{background:rgba(255,255,255,.06)}
 
       /* Narrow viewport (phone portrait, and most phone-landscape widths):
-         .film-info is a fixed 220/260px column that fights .film-chips for
-         space on the same line — on a narrow screen that leaves showtimes
-         almost no room, wrapping them into a cramped stack. Below this
-         width, poster+title move to their own first line (full width to
-         work with) and the showtime chips drop to their own line(s)
-         below, instead of splitting one line three ways. film-row is
-         already a flat flex container with exactly those three children,
-         so this only needs flex-wrap plus letting film-info size to
-         content instead of a fixed width — no markup change. Higher-
-         specificity .ub-large/.cs-row selectors are repeated here since a
-         plain #uci-browse .film-info rule wouldn't win against them. */
+         the fixed 220px .ub-info column fights .film-chips for space on
+         the same line, leaving showtimes almost no room. Below this width
+         the poster+title link takes its own first line and the chips drop
+         to their own line(s) below — film-row is a flat flex container
+         with exactly those two children, so this is just flex-wrap. */
       @media (max-width: 640px) {
         #uci-browse .film-row { flex-wrap: wrap; }
         /* flex-basis must be 0, not auto: with auto, a flex item's size
            for the *wrapping decision* is its content's natural size —
-           and with .film-title's white-space:nowrap below, a long
-           title's natural size is its full unwrapped text width, which
-           alone can exceed the row and bump film-info to its own line
-           before min-width:0/ellipsis ever get a chance to shrink it.
-           Confirmed against a real screenshot: short titles stayed on
-           the poster's line, only long ones broke onto their own —
-           exactly this threshold effect. A 0 basis means the wrap
-           decision sees "small", then flex-grow:1 fills the line's
-           actual remaining space at layout time. */
-        #uci-browse .film-info,
-        #uci-browse.ub-large .film-info { width: auto; flex: 1 1 0; min-width: 0; }
-        #uci-browse .film-chips,
-        #uci-browse .film-row.cs-row .film-chips { flex: 1 1 100%; }
-        /* More room now that title+poster get the full row width to
-           themselves (not sharing it with the chips) — two lines with a
-           clamp instead of one aggressively truncated line. */
-        #uci-browse .film-title {
-          white-space: normal; display: -webkit-box; -webkit-line-clamp: 2;
-          -webkit-box-orient: vertical; overflow: hidden;
-        }
+           and a long title's natural size is its full unwrapped text
+           width (the line clamp doesn't shrink that). Confirmed against a
+           real screenshot: short titles stayed on the poster's line, only
+           long ones broke onto their own. A 0 basis means the wrap
+           decision sees "small", then flex-grow:1 fills the line. */
+        #uci-browse .ub-film-link { flex: 1 1 0; }
+        #uci-browse .ub-info { width: auto; flex: 1 1 0; min-width: 0; }
+        #uci-browse .film-chips { flex: 1 1 100%; min-height: 0; }
+        /* Weitere's dated chips: three per line instead of two (measured:
+           12 dates took 6 lines / 344px); widest label "28.3.27 17:00". */
+        #uci-browse .chip.chip--date { width: calc((100% - 10px) / 3); }
+        /* Demnächst: Buchen stays beside the title instead of taking a
+           line of its own (measured: 119px rows). */
+        #uci-browse .film-row.cs-row { flex-wrap: nowrap; }
+        #uci-browse .film-row.cs-row .film-chips { flex: 0 0 auto; }
       }
 
       #uci-browse .extra-date-group{margin:0}
@@ -1970,7 +2431,7 @@
         background:#fff101;color:#000;border:0;border-radius:6px;padding:8px 14px;
         font-weight:700;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.3)}
 
-      /* Toggling Nur OV / Kompakt changes page height, which can cross the
+      /* Toggling Nur OV or switching tabs changes page height, which can cross the
          viewport's overflow threshold and toggle the vertical scrollbar —
          that shifts the whole page's width by the scrollbar's own size,
          not just this panel. Reserve the space permanently so it can't. */
@@ -1980,12 +2441,20 @@
          its own content either. */
       #uci-browse{width:100%;box-sizing:border-box}
 
+      /* The "Ihre Filme im UCI Kino …" heading sat ~100px left of the
+         panel: measured live, .cinema-select spans 1192px with 64px side
+         margins inside .container-standard while the panel is a centered
+         960px. Same width + centering lines them up; auto margins also
+         collapse to 0 on narrower screens, where both fill the container. */
+      .container-standard > .cinema-select{max-width:960px;margin-left:auto !important;
+        margin-right:auto !important}
+
       /* Pure marketing banner — nothing functional lives here. */
       .pimcore_area_keyvisual-kinowelt{display:none !important}
 
       /* The native filter panel (Datum/Version/Uhrzeit/Events, the Filter
          toggle, the reset link) is fully superseded by our own date tabs
-         and Nur-OV/Kompakt controls — removed outright rather than kept as
+         and Nur-OV control — removed outright rather than kept as
          a fallback. Real data-attribute, unique to this one wrapper. */
       [data-schedule-filters-wrapper]{display:none !important}
 
@@ -2079,6 +2548,18 @@
     // would otherwise never run at all during that first second, which is
     // exactly the native-page flash this whole thing exists to prevent.
     mount();
+    narrowMQ.addEventListener('change', () => { if (panel.isConnected) render(); });
+    // Pills per row follow the width (weekChipLimit), so a width change
+    // inside one breakpoint (rotation, window resize) re-renders too. Width
+    // only: iOS Safari fires resize whenever its toolbar collapses on
+    // scroll, and rebuilding the list on every scroll isn't wanted.
+    let lastVW = window.innerWidth, resizeTimer = 0;
+    window.addEventListener('resize', () => {
+      if (window.innerWidth === lastVW) return;
+      lastVW = window.innerWidth;
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => { if (panel.isConnected) render(); }, 200);
+    });
     // At document-start, .movies-grid usually doesn't exist for the first
     // several ticks, so this polls quickly at first rather than waiting a
     // full second per attempt, then drops to the steady rate once mounted

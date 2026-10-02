@@ -1,5 +1,124 @@
 # Changelog
 
+## 3.1.7
+
+iPhone (Userscripts in Safari):
+
+- The Unlimited Card panel works. It used to stay on "Warenkorb wird
+  gelesen…" with no cards. Userscripts doesn't provide `GM_getValue`, so
+  the first update tick threw a ReferenceError and the loop that fills the
+  panel never ran again (confirmed in the iOS simulator). That loop was
+  also what auto-expands the section, which is why it once loaded
+  "neither expanded nor expandable" (3.0.1).
+- Storage uses `GM.getValue`/`GM.setValue` where `GM_getValue` doesn't
+  exist. Saved cards, the payment method and programme settings now
+  persist on iPhone. Nothing was ever saved there before, so cards have to
+  be added once, or brought over with Exportieren/Importieren.
+- With those permissions Userscripts runs the script walled off from the
+  page, so a small helper injected into the page reads the booking state
+  and sends the requests through UCI's own jQuery, as Tampermonkey does
+  directly.
+- One failing step can no longer stop the panel's update loop, and errors
+  show in the panel's log, since a phone has no console. "Unlimited Cards
+  verwalten" shows a status line (page access, storage).
+
+Programme page:
+
+- Showtime pills are smaller (60×34 instead of 76×38) and the number per
+  row follows the actual width. A 390px+ iPhone shows 4 pills plus
+  "+N weitere" (was 3), a 375px one 3, desktop up to 9 (was 6), and a film
+  with only one line's worth shows them all.
+
+## 3.1.6
+
+Programme page (phone width):
+
+- Date tabs are one swipeable row instead of three wrapped rows.
+- Woche fits each film on one line: 3 showtimes plus "+N weitere" (or
+  all 4 if there are exactly 4) instead of 6 across two lines;
+  Weitere shows 6 dated chips, three per line, with two-digit years.
+- Demnächst keeps "Buchen" beside the title.
+
+Booking page:
+
+- Phone width: ticket picker uses the full width as a single box (no
+  box-in-box); the back link no longer
+  wraps; the seat-map legend no longer breaks labels mid-word.
+- "1 freier Platz" instead of "1 freie Plätze".
+- The "Nach diesem Schritt …" voucher warning is hidden again — UCI moved
+  it, so the old rule stopped matching.
+- Card names, card numbers and server error messages are escaped before
+  being written into the page — an imported card list could previously
+  inject HTML into the booking page.
+- Ticket picker: prices always sit on their own line under the ticket
+  name, instead of jumping between beside and below it.
+- "Fam. Erw." explains why it can't be added ("nur mit Fam. Kind"), and a greyed-out "Weiter" says "Erst Tickets und Plätze wählen".
+- The two top bars (logo/name and back arrow) are merged into one quiet
+  row on the page background: "‹ Zurück" on the left, name on the right.
+- Payment-method memory clicks only the PayPal / Kreditkarte *tabs*, by
+  their ids. It used to click the first element containing that text —
+  which only worked because the tabs come before the "JETZT … ZAHLUNG
+  HINTERLEGEN" buttons in the page.
+- Deleting a saved card: the × is always visible (it was invisible on
+  touch devices) and needs a second click ("löschen?") to confirm.
+
+## 3.1.1
+
+Programme page:
+
+- Showtime chips are real links: Cmd/middle-click opens a booking in a
+  new tab, and they're reachable with the keyboard.
+- Poster and title link to the film's own UCI page (trailer, description).
+- The dark box behind each title is gone — it was UCI's own `.film-info`
+  style leaking onto ours via a shared class name.
+- OmU/OmeU chips are tinted blue like OV, matching what Nur OV counts as
+  original language.
+- Weekday/date prefixes on chips are de-emphasized so the times stand out.
+- Day tabs no longer show "+N diese Woche" — Woche covers that now.
+- "Kompakt" toggle removed; the compact layout is the only one.
+- The "Ihre Filme im UCI Kino …" heading lines up with the panel.
+
+## 3.1.0
+
+Programme page:
+
+- New default **Woche** tab: every film playing in the next 8 days, each
+  with its next 6 showings labelled by weekday ("Fr 20:10", "Sa 17:00") and
+  the rest behind "+N weitere" — no clicking through day tabs to see the
+  week. The day tabs stay for "what's on Saturday?"-style browsing.
+- Showings from today that have already started are left out of Woche.
+- Film rows are top-aligned: expanding "+N weitere" no longer slides the
+  poster and title down.
+- Showtime chips are all the same size (one width for this week, a wider
+  one for Weitere's dated chips) instead of sizing to their labels.
+
+## 3.0.3
+
+Programme page:
+
+- Film count ("21 Filme") and the Weitere section counts now respect
+  Nur OV instead of counting films with no OV showing.
+- Weitere tab no longer disappears while searching — it used to vanish
+  when the query had no far-future match, shifting Demnächst under the
+  cursor. A search with no Weitere hits now shows an empty state instead.
+- Films the native page lists twice (e.g. ALWAYS LALISA) are merged into
+  one row instead of appearing as duplicates.
+- Search ✕ now actually clears the search. Chrome's built-in clear button
+  only worked if the field was already focused, so the first click
+  usually did nothing; it's replaced with the panel's own button.
+- Rows in Weitere with more than 12 dates collapse behind "+N weitere"
+  instead of a wall of 40+ chips.
+- Titles wrap to two lines (and show in full on hover) instead of
+  truncating to one, so titles that only differ at the end are
+  distinguishable.
+- Date tabs with no showings yet (usually the unpublished end of the
+  week) are dimmed.
+
+Repo:
+
+- `test/validate-fixtures.js` imports from `archive/seat-map.js`, where
+  the seat-parsing code moved in 3.0.0; it previously crashed on load.
+
 ## 3.0.0
 
 Booking page:
