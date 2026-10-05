@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.1.9
+
+Booking page:
+
+- After EINLÖSEN, the cart bar at the bottom no longer stays dimmed with a
+  spinner over the total. UCI's own cart refresh puts that loading mask up
+  and leaves removing it to the caller; UCI's voucher flow does, the script
+  didn't. It now removes the cart bar's mask once the page has updated
+  (confirmed on the live page: the mask stayed after the update, and was
+  gone with the fix, total unchanged).
+
 ## 3.1.8
 
 Programme page:

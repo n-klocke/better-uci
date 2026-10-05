@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         better-uci
 // @namespace    https://github.com/n-klocke/better-uci
-// @version      3.1.8
+// @version      3.1.9
 // @description  Batch-redeem UCI Unlimited cards on the booking page, and a denser, filterable programme browser on the kinoprogramm page.
 // @author       n-klocke
 // @license      MIT
@@ -560,6 +560,19 @@
     });
     return b || undefined;
   }
+
+  // Hands a server response to the page so its own views (cart bar, ticket
+  // list) update. The page's refreshCustomerCart puts a loading mask with a
+  // spinner over the cart bar and never takes it off itself; UCI's own
+  // voucher flow removes it afterwards (removeBlockingMaskFromTicketRelatedContent).
+  // Without the same step the spinner stayed over the total after every
+  // redeem (confirmed on the live page, 2026-10-05). Only the cart bar's
+  // mask is removed, and only once the page has re-rendered the cart. The
+  // DOM is shared, so this works in both Tampermonkey and the bridge.
+  async function applyToPage(resp) {
+    await getBook().handleBookingServerSuccess(resp);
+    document.querySelectorAll('#customer-cart .blocking-mask').forEach((m) => m.remove());
+  }
   const bpid = () => { const b = getBook(); return b && b.bookingProcessId; };
   const pageAccess = () => (pageWin() ? 'direkt' : !useBridge ? 'keiner'
     : pageBridge.alive ? 'Bridge' : 'Bridge (keine Antwort)');
@@ -691,7 +704,7 @@
 
         const already = appliedRow(rows, code);
         if (already) {
-          if (resp0) await getBook().handleBookingServerSuccess(resp0);
+          if (resp0) await applyToPage(resp0);
           return { ok: true, seat: seatLabel(already), note: 'war schon drauf' };
         }
 
@@ -713,7 +726,7 @@
           throw new Error('Server hat die Karte nicht angewendet');
 
         rep.phase('Ansicht wird aktualisiert');
-        await getBook().handleBookingServerSuccess(resp);
+        await applyToPage(resp);
         return { ok: true, seat: seatLabel(row) };
       } catch (err) {
         rep.log(`Versuch ${n}/${MAX_ATTEMPTS}: ${[err.code, err.message].filter(Boolean).join(' — ')}`, 'err');
