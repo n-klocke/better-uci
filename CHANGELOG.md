@@ -1,5 +1,17 @@
 # Changelog
 
+## 3.1.8
+
+Programme page:
+
+- The programme loads again. It showed "Kein Programm gefunden" for every
+  cinema. UCI changed its showtime links from
+  `…/performanceId/<id>/siteId/<n>` to
+  `https://buchung.uci-kinowelt.de/?perf_id=<id>&site_id=<n>`, and only
+  the old form was recognised, so every showtime and with it every film
+  was dropped. Both forms are read now (confirmed on the live East Side
+  Gallery page: 0 films before, 63 films with 275 showtimes after).
+
 ## 3.1.7
 
 iPhone (Userscripts in Safari):

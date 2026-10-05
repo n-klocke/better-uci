@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         better-uci
 // @namespace    https://github.com/n-klocke/better-uci
-// @version      3.1.7
+// @version      3.1.8
 // @description  Batch-redeem UCI Unlimited cards on the booking page, and a denser, filterable programme browser on the kinoprogramm page.
 // @author       n-klocke
 // @license      MIT
@@ -1624,6 +1624,23 @@
     }
 
     // -------------------------------------------------------------- parsing
+    // A showtime link carries the performance and site ids in one of two
+    // shapes. Until early October 2026 it was a path
+    // (…/performanceId/<id>/siteId/<n>); since then UCI links straight to
+    // the booking page (https://buchung.uci-kinowelt.de/?perf_id=<id>&site_id=<n>).
+    // Only the old shape was matched, so every showtime was dropped, every
+    // film with it, and the page said "Kein Programm gefunden". Both are
+    // read, in case UCI switches back or serves the old markup from a cache.
+    function performanceIds(href) {
+      const path = href.match(/performanceId\/([^/?#]+)\/siteId\/(\d+)/);
+      if (path) return { perfId: path[1], siteId: path[2] };
+      let url;
+      try { url = new URL(href, location.href); } catch { return null; }
+      const perfId = url.searchParams.get('perf_id') || url.searchParams.get('performanceId');
+      const siteId = url.searchParams.get('site_id') || url.searchParams.get('siteId');
+      return perfId && siteId ? { perfId, siteId } : null;
+    }
+
     // Every film's full detail — poster, runtime, FSK, every showtime — is
     // already in the DOM at load, individually hidden behind its own
     // d-none wrapper. No network calls needed: just read it.
@@ -1651,9 +1668,8 @@
         : (posterImg ? posterImg.src : null);
 
       const showtimes = [...card.querySelectorAll('a.badge-performance[data-date]')].map((a) => {
-        const href = a.getAttribute('href') || '';
-        const m = href.match(/performanceId\/([^/]+)\/siteId\/(\d+)/);
-        if (!m) return null;
+        const ids = performanceIds(a.getAttribute('href') || '');
+        if (!ids) return null;
 
         // The language shows up TWICE in the markup: once as an attribute-*
         // class (attribute-ov, attribute-omu…) and once as the visible
@@ -1676,7 +1692,7 @@
         return {
           time: a.dataset.time, date: a.dataset.date,
           auditorium: a.dataset.trackingAuditorium || '',
-          perfId: m[1], siteId: m[2],
+          perfId: ids.perfId, siteId: ids.siteId,
           formats, lang, special,
         };
       }).filter(Boolean);
