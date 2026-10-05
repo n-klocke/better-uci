@@ -52,7 +52,9 @@ that JSON like a credential.
 Replaces the poster grid with a list view:
 - **Date tabs** — today plus the next 7 days, one click away instead of a
   filter panel.
-- **Nur OV** and **Kompakt** toggles, saved across visits.
+- **New this week** — films in their first week get a yellow **NEU**
+  badge, films opening within the next 8 days a **Start** date badge.
+- **Nur OV** and **Nur neu** toggles, saved across visits.
 - **Weitere** — everything beyond the 8-day window, grouped into *Nächste 30
   Tage* / *Später dieses Jahr* / *Nächstes Jahr und später* rather than one
   section per date. One row per film, with every one of its remaining dates

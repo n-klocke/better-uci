@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         better-uci
 // @namespace    https://github.com/n-klocke/better-uci
-// @version      3.1.9
+// @version      3.2.0
 // @description  Batch-redeem UCI Unlimited cards on the booking page, and a denser, filterable programme browser on the kinoprogramm page.
 // @author       n-klocke
 // @license      MIT
@@ -1579,7 +1579,7 @@
     })();
 
     const PREF_KEY = 'uci_browse_prefs_v1';
-    let prefs = { ovOnly: false };
+    let prefs = { ovOnly: false, newOnly: false };
     // Not persisted like prefs — a stale search silently reapplying on a
     // later visit would be more confusing than useful.
     let searchQuery = '';
@@ -1662,10 +1662,14 @@
       const title = titleEl ? titleEl.textContent.trim() : null;
       if (!title) return null;
 
-      let runtime = null, genre = null;
+      // The first item is either UCI's "Neu" label (an .event-label) or
+      // "N. Spielwoche". "Neu" used to fall through into the genre, so the
+      // meta line read "117min · Neu, Drama, …".
+      let runtime = null, genre = null, isNew = false;
       card.querySelectorAll('.film-info li').forEach((li) => {
         const t = li.textContent.trim();
         if (/^\d+\s*min$/i.test(t)) runtime = t;
+        else if (/^neu$/i.test(t)) isNew = true;
         else if (!/spielwoche/i.test(t) && t) genre = genre ? genre + ', ' + t : t;
       });
 
@@ -1715,7 +1719,7 @@
       // description) — kept so our poster+title can link there too.
       const filmLink = card.querySelector('.film-container__description__text__eventtitle a');
       const href = filmLink ? filmLink.getAttribute('href') : null;
-      return { title, runtime, genre, fsk, poster, href, showtimes };
+      return { title, runtime, genre, fsk, poster, href, isNew, showtimes };
     }
 
     // The native page can carry the same film in more than one container
@@ -1736,8 +1740,31 @@
           seen.showtimes.push(...film.showtimes.filter((s) => !perfIds.has(s.perfId)));
           if (!seen.poster) seen.poster = film.poster;
           if (!seen.href) seen.href = film.href;
+          if (film.isNew) seen.isNew = true;
         });
       return [...byTitle.values()];
+    }
+
+    // New this week. UCI's "Neu" label covers a film's whole first week,
+    // but also every film that hasn't started yet, months ahead (on
+    // 2026-10-05 in Hamburg Mundsburg: 34 "Neu" films, 21 of them starting
+    // after the 8-day window). So a film counts only if it's "Neu" and
+    // plays within the window. German releases start on Thursdays: a film
+    // whose first remaining showing comes before the next Thursday is in
+    // its first week already ("Neu"), one starting later opens this week
+    // ("Start 08.10."; the weekday only in the tooltip). Earliest showing over all showtimes, ignoring
+    // Nur OV, so the badge doesn't change with the filter.
+    function freshness(film, days) {
+      if (!film.isNew) return null;
+      const first = film.showtimes.reduce((m, s) => (s.date < m ? s.date : m), '99999999');
+      if (first > days[days.length - 1].str) return null;
+      const today = new Date();
+      const nextThu = new Date(today);
+      nextThu.setDate(today.getDate() + ((4 - today.getDay() + 7) % 7 || 7));
+      if (first < ymd(nextThu)) return { label: 'Neu', tip: 'Erste Spielwoche' };
+      const d = new Date(+first.slice(0, 4), +first.slice(4, 6) - 1, +first.slice(6, 8));
+      const date = `${first.slice(6, 8)}.${first.slice(4, 6)}.`;
+      return { label: 'Start ' + date, tip: `Startet ${WEEKDAY.format(d)} ${date}`, upcoming: true };
     }
 
     // -------------------------------------------------------------- render
@@ -1814,6 +1841,15 @@
     function titleHTML(title) {
       return `<div class="film-title" title="${title.replace(/"/g, '&quot;')}">${title}</div>`;
     }
+    // On its own line above the title, so it never eats into the title's
+    // two clamped lines.
+    function freshBadgeHTML(fresh) {
+      if (!fresh) return '';
+      return `<div class="ub-new-line"><span class="ub-new${fresh.upcoming ? ' ub-new--upcoming' : ''}" title="${fresh.tip}">${fresh.label}</span></div>`;
+    }
+    // No row accent under Nur neu: every row is new then, and a yellow
+    // edge on all of them only adds noise. The badge stays.
+    const rowClass = (film) => 'film-row' + (film.fresh && !prefs.newOnly ? ' film-row--new' : '');
 
     const filmMeta = (film) => [film.runtime, film.fsk ? 'FSK ' + film.fsk : null, film.genre].filter(Boolean).join(' · ');
 
@@ -1825,6 +1861,7 @@
       const inner = `
           ${f.poster ? `<img class="film-thumb" src="${f.poster}" loading="lazy" alt="">` : '<div class="film-thumb film-thumb--empty"></div>'}
           <div class="ub-info">
+            ${freshBadgeHTML(f.fresh)}
             ${titleHTML(f.title)}
             <div class="film-meta">${meta}</div>
           </div>`;
@@ -1845,7 +1882,7 @@
         .sort((a, b) => a.time.localeCompare(b.time));
       if (!shown.length) return '';
       return `
-        <div class="film-row">
+        <div class="${rowClass(film)}">
           ${filmHeadHTML(film, filmMeta(film))}
           <div class="film-chips">${shown.map(chipHTML).join('')}</div>
         </div>`;
@@ -1874,7 +1911,7 @@
            </button>`
         : '';
       return `
-        <div class="film-row">
+        <div class="${rowClass(film)}">
           ${filmHeadHTML(film, filmMeta(film))}
           <div class="film-chips">${shown.map((s) => extraChipHTML(s, currentYear)).join('')}${moreHTML}</div>
         </div>`;
@@ -1930,7 +1967,7 @@
            </button>`
         : '';
       return `
-        <div class="film-row">
+        <div class="${rowClass(film)}">
           ${filmHeadHTML(film, filmMeta(film))}
           <div class="film-chips">${shown.map(weekChipHTML).join('')}${moreHTML}</div>
         </div>`;
@@ -2094,13 +2131,14 @@
       const films = collectFilms();
       if (!films.length) { panel.innerHTML = '<div class="ub-empty">Kein Programm gefunden.</div>'; return; }
       films.sort((a, b) => a.title.localeCompare(b.title, 'de'));
-      const visibleFilms = films.filter((f) => matchesQuery(f.title));
 
       const today = new Date();
       const days = [...Array(8)].map((_, i) => {
         const d = new Date(today); d.setDate(d.getDate() + i);
         return { str: ymd(d), label: dateLabel(d, i) };
       });
+      films.forEach((f) => { f.fresh = freshness(f, days); });
+      const visibleFilms = films.filter((f) => matchesQuery(f.title) && (!prefs.newOnly || f.fresh));
       const knownDates = new Set(days.map((d) => d.str));
 
       if (!panel.dataset.selected) panel.dataset.selected = 'woche';
@@ -2138,7 +2176,10 @@
       const query = searchQuery.trim();
       const emptyMsg = query
         ? `Keine Treffer für „${query}“.`
-        : (sel === 'extra' ? 'Keine weiteren Vorstellungen'
+        : (prefs.newOnly
+          ? 'Keine neuen Filme' + (sel === 'extra' ? ' mit weiteren Vorstellungen'
+            : sel === 'woche' ? ' diese Woche' : ' an diesem Tag')
+          : sel === 'extra' ? 'Keine weiteren Vorstellungen'
           : sel === 'woche' ? 'Keine Vorstellungen diese Woche'
           : 'Keine Vorstellungen an diesem Tag')
           + (prefs.ovOnly ? ' in OV' : '') + '.';
@@ -2156,7 +2197,10 @@
       panel.innerHTML = `
         <div class="ub-bar">
           <div class="ub-tabs">${tabsHTML}</div>
-          <label class="ub-ov"><input type="checkbox" id="ub-ovonly" ${prefs.ovOnly ? 'checked' : ''}> Nur OV</label>
+          <div class="ub-toggles">
+            <label class="ub-ov"><input type="checkbox" id="ub-ovonly" ${prefs.ovOnly ? 'checked' : ''}> Nur OV</label>
+            <label class="ub-ov"><input type="checkbox" id="ub-newonly" ${prefs.newOnly ? 'checked' : ''}> Nur neu</label>
+          </div>
           <button type="button" class="ub-search-toggle" id="ub-search-toggle" aria-label="Suche öffnen">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                  stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/>
@@ -2201,6 +2245,7 @@
         };
       });
       panel.querySelector('#ub-ovonly').onchange = (e) => { prefs.ovOnly = e.target.checked; savePrefs(); render(); };
+      panel.querySelector('#ub-newonly').onchange = (e) => { prefs.newOnly = e.target.checked; savePrefs(); render(); };
       panel.querySelector('#ub-search').oninput = (e) => { searchQuery = e.target.value; render(); };
       // The toggle is mobile-only (display:none above 640px); the close
       // button doubles as the desktop clear ✕ whenever there's a query
@@ -2280,6 +2325,12 @@
       #uci-browse .ub-tab--empty:not(.active){color:#5c6673;background:rgba(255,255,255,.03)}
       #uci-browse .ub-ov{display:flex;align-items:center;gap:6px;font-size:12.5px;
         color:#cfd6e0;white-space:nowrap;accent-color:#fff101}
+      /* Stacked on desktop: side by side, a second checkbox pushed the tab
+         row past the panel width (see .ub-tab padding above). */
+      #uci-browse .ub-toggles{display:flex;flex-direction:column;gap:2px}
+      @media (max-width: 640px) {
+        #uci-browse .ub-toggles{flex-direction:row;gap:14px}
+      }
 
       /* Confirmed via a real screenshot: below this width the two .ub-ov
          checkboxes don't wrap onto their own clean line — they land
@@ -2366,6 +2417,20 @@
          beside the 57px compact thumbnail along with .film-meta. */
       #uci-browse .film-title{font-weight:600;font-size:13.5px;line-height:1.3;
         overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+      /* New this week (see freshness()): yellow badge above the title and
+         a yellow edge on the row; outlined while the film hasn't started. */
+      /* The edge sits in the panel's own 14px side padding (::before, not
+         a border or row padding): inside the row it pushed that row's
+         poster and chips 7px right of every other row. */
+      #uci-browse .film-row.film-row--new{position:relative;background:rgba(255,241,1,.035)}
+      #uci-browse .film-row.film-row--new::before{content:'';position:absolute;left:-8px;
+        top:6px;bottom:6px;width:3px;border-radius:2px;background:#fff101}
+      #uci-browse .film-row.film-row--new:hover{background:rgba(255,241,1,.07)}
+      #uci-browse .ub-new-line{line-height:1;margin-bottom:3px}
+      #uci-browse .ub-new{display:inline-block;padding:1px 5px;border-radius:3px;
+        background:#fff101;color:#000;border:1px solid #fff101;font-size:9.5px;font-weight:700;
+        line-height:1.3;letter-spacing:.03em;text-transform:uppercase}
+      #uci-browse .ub-new--upcoming{background:transparent;color:#fff101;border-color:rgba(255,241,1,.6)}
       #uci-browse .film-meta{font-size:11px;color:#8b97a8;white-space:nowrap;
         overflow:hidden;text-overflow:ellipsis}
       #uci-browse .film-chips{display:flex;flex-wrap:wrap;gap:5px;flex:1;

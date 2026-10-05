@@ -1,5 +1,21 @@
 # Changelog
 
+## 3.2.0
+
+Programme page:
+
+- Films new this week stand out: a yellow **NEU** badge above the title
+  and a yellow edge on the row for films in their first week, and an
+  outlined **START 08.10.** badge for films opening later in the 8-day
+  window. Based on UCI's own "Neu" label, which it also puts on films
+  months away, so only films playing within the window count (confirmed
+  against the live Hamburg Mundsburg page: 9 of 34 "Neu" films).
+- **Nur neu** toggle next to Nur OV, saved across visits. Filters Woche,
+  the day tabs and Weitere. The yellow row edge is left off while it's on,
+  since every row would have it; the badges stay.
+- "Neu" no longer shows up as a genre in the meta line ("117min · Neu,
+  Drama, …").
+
 ## 3.1.9
 
 Booking page:
