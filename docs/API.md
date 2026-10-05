@@ -161,6 +161,52 @@ directly.
 Used by the voucher-redemption module. Not documented in detail here —
 see `better-uci.user.js` for its usage.
 
+## Seat map internals (`book.seatingApp`) — confirmed 2026-10-06
+
+Groundwork for an automatic "best seats" picker (not built yet). All of this
+was observed live by wrapping the seat-map prototypes and logging the calls a
+real click makes. `bd` below is `book.seatingApp.bookingData`.
+
+- **Seat models:** `bd.attributes.seats.models` (Backbone), one per seat. The
+  attributes include `row`, `seatNumber` (the customer-facing Platz),
+  `x`/`y`/`width`/`height` (own units: seats ~30 wide at a ~30.6 pitch, rows
+  ~76 apart, lower `y` = closer to the screen), `statusStr` (`FREE`, `SOLD`,
+  `BLOCKED`, `SELECTEDFREE` = held by another session) and `typeStr`
+  (`REGULAR`, `WHEELCHAIR`). Also `neighborLeft`/`neighborRight`,
+  `isAisleSeat`, `isEdgeSeat`. `m.getSectionId()` gives the price category.
+  The models stay loaded on the payment step, with the picked seats still
+  `isSelected()`.
+- **Selecting a seat:** a real click runs `seat.markSeat('add')`, then
+  `bd.lockSeats([seat])`. `lockSeats` locks it server-side and then calls
+  `permanentlySelectSeat()` and `bd.addSeat(seat)` itself. Doing exactly
+  those two calls from code works: the map draws the seat, the header shows
+  "Reihe E | Platz 24,25", and Weiter becomes enabled.
+- **Deselecting a seat:** `seat.markSeat('remove')`, then
+  `bd.unlockSeats([seat])`, which runs `unlockSeat`, `unselectSeat` and
+  `removeSeat`.
+- **Don't do this:** calling `temporarilySelectSeat()`,
+  `lockSeats()` and `permanentlySelectSeat()` directly (the old
+  `archive/seat-map.js` approach), or `unselectSeat()` alone. The seat then
+  reports as selected, but `bd.attributes.seatsPlaced` keeps the old seats,
+  the map doesn't redraw it, and Weiter stays disabled.
+- **Price categories (sections):** `bd.attributes.sections.models`. In
+  Mundsburg Kino 7 these are `1:VIP`, `2:PK 1`, `3:PK 2`, `4:PK 3` and
+  `6:PK1-LOGE`. Only one is active at a time (`bd.getActiveSection()`).
+  `bd.activateSection(id)` switches categories and resets the seat selection
+  (`resetSeatSelection`), but the ticket count stays as it was. A click on a
+  seat in another category does the same thing, and selects that seat too.
+- **Ticket count needs an active category:** on a fresh page no category is
+  active, and the ticket picker's + does nothing until a seat has been
+  clicked once (that click only activates its category). `bd.getSeatingLimit()`
+  equals the ticket count.
+- **UCI's cart (`#customer-cart`) stays empty on the seat step** ("Es
+  befindet sich noch nichts in Ihrem Warenkorb") until Weiter is pressed. On
+  the payment step it has one line per row: `PK 2 | Reihe J | Sitz 13, 14`.
+- **Unlimited eligibility per category:** Loge seats are eligible
+  (`priceRows[].unlimitedTicketAvail === true` at 17,90 €). **VIP: OPEN.**
+  The check was inconclusive because `book.priceRows` still showed the
+  previous seats after stepping back and re-picking.
+
 ## Ticket-type ID reference
 
 IDs are stable across price categories within a given performance (only
