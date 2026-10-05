@@ -1,5 +1,86 @@
 # Changelog
 
+## 3.4.0
+
+- **WebMCP tools** for browser AI agents, in browsers that support WebMCP
+  (`document.modelContext`, or `navigator.modelContext` in Chrome's early
+  preview). Elsewhere nothing changes, iPhone included.
+  - Programme page: `search_showtimes` (title, date range, time of day,
+    original language, format, new only), `list_new_this_week`,
+    `list_coming_soon` and `open_booking`.
+  - Booking page: `get_booking_state`, `list_unlimited_cards` and
+    `redeem_unlimited_cards`, for your own card and saved friends' cards,
+    by name.
+  - Redeeming always asks first, in a better-uci dialog on the page. Card
+    numbers only ever reach the agent masked. Seat choice, Weiter and
+    payment stay with you.
+
+## 3.3.0
+
+Programme page:
+
+- **Event** badge and a purple row edge for UCI Events and special
+  screenings (concerts, Royal Ballet & Opera, live shows), read from UCI's
+  own showtime codes 289 and 619. These no longer get NEU or Start badges.
+- **Sneak** badge on the Überraschungspremiere.
+- Special screenings are marked on the showtime chip itself, since they
+  usually cover only some of a film's showings: **Preview** (blue, before
+  the film's official start), **Midnight** (red, UCI's "Midnight Movie
+  präsentiert") and **Women's** (pink, Women's Night). E.g. Der perfekte
+  Urlaub: Women's Night on 3 of 104 showings, a preview on 21.10., start
+  22.10.; Hope: Midnight Movie on 4 of 22. Only when every showing of a
+  film is one does the film get the badge and a row edge in that color
+  too.
+- The official start dates come from `/coming-soon`, now loaded right away
+  instead of on the first Demnächst click.
+- "Original-Ansicht zeigen" works again. It only cleared the poster
+  grid's inline style, but two stylesheets hiding the native page with
+  `!important` still won, and the once-a-second re-hiding put it back
+  anyway. It now switches all of that off and shows everything the script
+  hid (poster grid, filters, Aktuelles Programm/Demnächst tabs, banner,
+  view switcher, search box); "← Zur modernen Ansicht" hides them again.
+
+Booking page:
+
+- A small **better-uci: an / aus** pill in the top bar switches off
+  everything the script changes on the booking page, in place, without a
+  reload: layout and header styling, the card panel, the ticket picker,
+  hints and badges, the hidden native Unlimited Card form and the renamed
+  checkout button. Switching back on re-applies it all. The setting is
+  saved, so it stays off across booking steps until switched back on. It
+  can't be switched off mid-redemption. Accordion sections the script
+  opened and a payment method it pre-selected stay as they are.
+- Seat, payment and confirm step: a bar along the bottom shows what's picked so far
+  ("2 Tickets · 33,80 €", "Reihe 2: Sitz 11, 12"), read live from UCI's
+  own cart bar, which it replaces on those steps, with the step's button
+  (Weiter, JETZT KAUFEN) at its right end. Until the terms are accepted it
+  says so. Weiter's
+  disabled state is a plain grey instead of a murky olive.
+- Compact performance header: film title with a version chip (OmU, OV,
+  OmeU), then "Sa 10.10. · 11:30 · East Side Gallery · Kino 07" on one
+  line. The title had disappeared from the page with the merged top bar.
+- The ticket picker is one card on desktop too, instead of a card inside
+  two darker boxes.
+- The better-uci pill is lowercase and dimmer; the site's button styles
+  had turned it into an uppercase "BETTER-UCI: AN".
+- The seat-map legend shows each category's Erwachsener price ("PK 1 ·
+  16,90 €"), from the same seatsAndTickets.json request UCI's seat map
+  makes, and is smaller: 12.5px text, 13px swatches, without the ~30px of
+  stacked margins under it.
+- Payment step: while Unlimited Cards are ticked but not redeemed, the
+  bottom bar says so ("1 Unlimited Card noch nicht eingelöst — sonst
+  9,90 € fällig") and Weiter is outlined instead of filled, so paying full
+  price by clicking past EINLÖSEN is harder to do by accident.
+- Payment and confirm step in one 640px column, like the header, instead
+  of ~930px cards half-filled by the card panel. The always-open Unlimited
+  Card section has a small label instead of a heading with a dead chevron,
+  the disabled "Buchungsabschluss und Zahlung hinterlegen" row is hidden
+  until it can be used, and the card panel's summary no longer repeats
+  ticket count and total from the bar.
+- The compact header no longer gets stuck on UCI's "wird geladen..."
+  placeholders, the bar lines up with the cards on the payment and
+  confirm step, and the Movie Points toggle isn't uppercased.
+
 ## 3.2.0
 
 Programme page:

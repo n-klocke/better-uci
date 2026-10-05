@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         better-uci
 // @namespace    https://github.com/n-klocke/better-uci
-// @version      3.2.0
+// @version      3.4.0
 // @description  Batch-redeem UCI Unlimited cards on the booking page, and a denser, filterable programme browser on the kinoprogramm page.
 // @author       n-klocke
 // @license      MIT
@@ -31,7 +31,7 @@
   // cache once, before init, and the rest of the script keeps synchronous
   // get/set. Keys are listed here because the cache has to know them
   // up front.
-  const STORE_KEYS = ['uci_cards_v1', 'uci_payment_method_v1', 'uci_browse_prefs_v1'];
+  const STORE_KEYS = ['uci_cards_v1', 'uci_payment_method_v1', 'uci_browse_prefs_v1', 'uci_booking_off_v1'];
   const store = (() => {
     const sync = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
     const gm4 = !sync && typeof GM === 'object' && GM !== null && typeof GM.getValue === 'function';
@@ -57,6 +57,93 @@
     };
   })();
 
+  // WebMCP: tools a browser agent can call on this page, registered with
+  // the page's document.modelContext (navigator.modelContext in Chrome's
+  // early preview). Silently nothing where neither exists, which today is
+  // every browser without the preview, iPhone included.
+  //
+  // Registration happens in the page world, through an injected script
+  // like pageBridge's: modelContext belongs to the page, and this script
+  // usually runs in an isolated world (always on iPhone). The page-side
+  // execute() forwards each call here over DOM events with JSON-string
+  // payloads, the handler runs with this script's own state, and the
+  // result goes back the same way. Returned as MCP-style text content,
+  // which reads fine both to agents that expect that shape and to the
+  // spec's plain JSON serialization.
+  //
+  // Anything in the page world can call a registered tool, so handlers
+  // never return Unlimited card numbers (masked only) and redeeming needs
+  // a click in better-uci's own confirmation.
+  const webmcp = (() => {
+    const ch = 'better-uci-mcp-' + Math.random().toString(36).slice(2);
+    const handlers = new Map();
+    let listening = false;
+
+    function pageMain(ch, defs) {
+      const mc = document.modelContext || navigator.modelContext;
+      if (!mc || typeof mc.registerTool !== 'function') return;
+      const pending = new Map();
+      let seq = 0;
+      document.addEventListener(ch + ':ret', (e) => {
+        let m;
+        try { m = JSON.parse(e.detail); } catch { return; }
+        const done = pending.get(m.id);
+        if (done) { pending.delete(m.id); done(m); }
+      });
+      const call = (name, input) => new Promise((resolve) => {
+        const id = ++seq;
+        pending.set(id, resolve);
+        document.dispatchEvent(new CustomEvent(ch + ':call',
+          { detail: JSON.stringify({ id, name, input: input || {} }) }));
+      }).then((m) => ({
+        content: [{ type: 'text', text: m.ok ? JSON.stringify(m.result, null, 1) : 'Error: ' + m.error }],
+        isError: !m.ok,
+      }));
+      defs.forEach((d) => {
+        const tool = Object.assign({}, d, { execute: (input) => call(d.name, input) });
+        try {
+          Promise.resolve(mc.registerTool(tool))
+            .catch((err) => console.warn('[better-uci] WebMCP registerTool', d.name, err));
+        } catch (err) {
+          console.warn('[better-uci] WebMCP registerTool', d.name, err);
+        }
+      });
+    }
+
+    return {
+      // tools: [{ name, title, description, inputSchema, annotations, run }].
+      // run(input) may be async; a thrown Error's message goes to the agent.
+      register(tools) {
+        if (!listening) {
+          listening = true;
+          document.addEventListener(ch + ':call', async (e) => {
+            let m;
+            try { m = JSON.parse(e.detail); } catch { return; }
+            const run = handlers.get(m.name);
+            let reply;
+            try {
+              if (!run) throw new Error('Unknown tool ' + m.name);
+              reply = { id: m.id, ok: true, result: await run(m.input || {}) };
+            } catch (err) {
+              reply = { id: m.id, ok: false, error: String((err && err.message) || err) };
+            }
+            document.dispatchEvent(new CustomEvent(ch + ':ret', { detail: JSON.stringify(reply) }));
+          });
+        }
+        // A re-mount only refreshes handlers: the page already has the
+        // tool, and registering a name twice is an error there.
+        const fresh = tools.filter((t) => !handlers.has(t.name));
+        tools.forEach((t) => handlers.set(t.name, t.run));
+        if (!fresh.length) return;
+        const defs = fresh.map(({ run, ...def }) => def);
+        const s = document.createElement('script');
+        s.textContent = `(${pageMain})(${JSON.stringify(ch)}, ${JSON.stringify(defs)});`;
+        (document.head || document.documentElement).appendChild(s);
+        s.remove();
+      },
+    };
+  })();
+
   if (location.hostname === 'buchung.uci-kinowelt.de') {
     store.whenReady(initRedeemer);
   } else if (location.hostname === 'www.uci-kinowelt.de') {
@@ -66,6 +153,14 @@
   function initRedeemer() {
   const TAG = '[uci-batch]';
   console.log(TAG, 'loaded', location.href);
+
+  // The "better-uci an/aus" pill (see setScriptOff): while off, every
+  // change this script makes to the booking page is undone in place, no
+  // reload. Saved, so it stays off across the booking steps until it's
+  // switched back on.
+  const OFF_KEY = 'uci_booking_off_v1';
+  let scriptOff = store.get(OFF_KEY, false) === true;
+  let layoutStyle = null;
 
   // @run-at is document-start, so document.head may not exist yet — same
   // retry pattern as the browse module for the same reason. This is a
@@ -105,19 +200,32 @@
          300px column just left the picker a 246px card in a wider box. */
       @media (max-width: 640px) {
         #ticketselection { flex: 1 1 100% !important; max-width: none !important; }
-        /* UCI's own #backdrop-wrapper-tickets (dark, 12px padding) plus a
-           15px .container padding wrapped our card in a second box,
-           leaving it 302px of 356px (measured). On phones the native
-           wrapper becomes the card — same box style as the seat map's
-           below it. */
-        #ticket-selection > .container { padding: 0 !important; }
-        #uci-tickets { background: none !important; border: none !important; padding: 0 4px !important; }
       }
+      /* UCI's own #backdrop-wrapper-tickets (dark, 12px padding) plus a
+         15px .container padding wrapped our card in a second box, leaving
+         it 302px of 356px on a phone (measured), and on desktop three dark
+         layers around one list. The native wrapper is the card instead —
+         same box style as the seat map's beside or below it. */
+      #ticket-selection > .container { padding: 0 !important; }
+      #uci-tickets { background: none !important; border: none !important; padding: 0 4px !important; }
       /* Seat-map legend (PK 1 / PK 2 / PK 3 / PK 1 LOGE): at phone width
          its labels broke mid-word ("PK / 1", "PK 1 / LOGE"). Keep each
          label on one line and let the items wrap as a whole instead. */
       #SeatingPlanComponentLayoutFooter > div > div { flex-wrap: wrap; justify-content: center; row-gap: 6px; }
       #SeatingPlanComponentLayoutFooter > div > div * { white-space: nowrap; }
+      /* Legend sized down: 17px text and 22px swatches, with 10px margin +
+         10px padding + 10px item margin stacked under it, made it the
+         largest text in the seat map box and left ~30px of dead space at
+         its bottom (measured live). Structure (also measured): row >
+         item > [swatch, label]. Swatch sizes via !important in case UCI
+         ever sets them inline. */
+      #SeatingPlanComponentLayoutFooter > div > div { padding: 4px 0 0 !important; margin: 6px 0 0 !important;
+        column-gap: 14px; font-size: 12.5px !important; }
+      #SeatingPlanComponentLayoutFooter > div > div > div { margin: 0 !important; align-items: center; }
+      #SeatingPlanComponentLayoutFooter > div > div > div > div:first-child {
+        width: 13px !important; height: 13px !important; border-radius: 3px; }
+      #SeatingPlanComponentLayoutFooter > div > div > div > div:last-child { margin-left: 6px !important; }
+      #SeatingPlanComponentLayoutFooter .uci-legend-price { color: #8b97a8; }
       /* A stylesheet rule rather than a JS-set inline style — the site
          replaces #ticket-type-container wholesale on every quantity
          change, and an inline style doesn't survive onto the replacement
@@ -196,9 +304,98 @@
         border: none !important; border-radius: 6px !important;
         font-weight: 700 !important; letter-spacing: .3px;
       }
+      /* Plain grey when disabled: the 28% yellow came out a murky olive on
+         the dark page. */
       #stepControl .btn-block:disabled {
-        background: rgba(255,241,1,.28) !important; color: rgba(0,0,0,.5) !important;
+        background: rgba(255,255,255,.08) !important; color: rgba(255,255,255,.35) !important;
       }
+
+      /* Seat and payment step: one bar at the bottom (see updateStepBar)
+         with what's picked so far — read from UCI's own #customer-cart,
+         hidden here since the bar replaces it — and the step's own button
+         (.uci-bar-action) at its right end. That button stays where it is
+         in the DOM and is only positioned over the bar: its click wiring
+         is UCI's, scope unknown (same caution as the payment cards).
+         Position:fixed still escapes the payment card's overflow:hidden,
+         since no ancestor has a transform (checked live). --uci-sb-l/-r
+         line it all up with the step's content column. */
+      html.uci-bar #customer-cart { display: none !important; }
+      html.uci-bar body { padding-bottom: 76px !important; }
+      .uci-bar-action {
+        position: fixed !important; right: var(--uci-sb-r, 16px); bottom: 11px; z-index: 1031;
+        margin: 0 !important; width: auto !important; min-width: 160px;
+      }
+      /* What's left in place: the seat step's empty #stepControl row and
+         the payment card's 12px padding around nothing. */
+      html.uci-bar #stepControl { margin: 0 !important; }
+      #payment-type-paid-content:has(.uci-bar-action),
+      #payment-type-free-content:has(.uci-bar-action) { padding: 0 !important; }
+      html.uci-bar #uci-step-hint { display: none !important; }
+      /* Payment step with ticked but unredeemed Unlimited Cards (see
+         updateStepBar): Weiter outlined, the bar's second line amber, so
+         paying full price can't happen by clicking past EINLÖSEN. */
+      html.uci-bar .uci-bar-action.uci-bar-action--muted {
+        background: transparent !important; color: #fff101 !important;
+        border: 1px solid rgba(255,241,1,.6) !important; }
+      /* Wraps instead of truncating: on a phone the warning is the one
+         line that must be read in full. */
+      #uci-stepbar.uci-sb-warn .uci-sb-sub { color: #f2c94c; white-space: normal; }
+
+      /* Payment and confirm step in one 640px column, the same width as the
+         header above (#booking-info .container) — the cards were ~930px
+         wide with the card panel (max 620px) filling only the left half.
+         The seat step stays wide for the seat map. */
+      #payment-selection, #payment-confirmation { max-width: 640px !important; }
+
+      /* The Unlimited Card section is always open (ensureAlwaysExpanded), so
+         its 22px heading and chevron were a toggle that did nothing — a
+         small label now. pointer-events off: a click would only start
+         UCI's collapse before the next poll tick reopens it. */
+      #payment-type-uc-header { padding: 10px 12px 6px !important; background: none !important;
+        border: none !important; pointer-events: none; cursor: default; }
+      #payment-type-uc-header h2 { font-size: 11.5px !important; font-weight: 700; color: #8b97a8;
+        text-transform: uppercase; letter-spacing: .06em; line-height: 1.3; }
+      #payment-type-uc-header .fa { display: none !important; }
+
+      /* "Buchungsabschluss und Zahlung hinterlegen" (PayPal/Kreditkarte) is
+         .disabled until Weiter is pressed — a dimmed row that couldn't be
+         used yet. Hidden only while disabled; it shows once it's usable. */
+      .card:has(> #payment-type-others-header.disabled) { display: none !important; }
+      #uci-stepbar {
+        position: fixed; left: 0; right: 0; bottom: 0; z-index: 1030;
+        background: rgba(8,12,22,.96); border-top: 1px solid rgba(255,255,255,.1);
+      }
+      /* 64px minimum on the left: UCI's cookie-settings button sits in the
+         bottom-left corner on phones. */
+      #uci-stepbar .uci-sb-inner {
+        box-sizing: border-box; min-height: 64px; display: flex; flex-direction: column;
+        justify-content: center; gap: 2px;
+        padding: 8px calc(var(--uci-sb-r, 16px) + 190px) 8px max(var(--uci-sb-l, 16px), 64px);
+      }
+      #uci-stepbar .uci-sb-sum { font-size: 14px; font-weight: 700; color: #fff;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      /* Phone: a narrower Weiter and less room reserved for it — at 190px
+         the total wrapped ("33,80 / €") in a 390px viewport (measured). */
+      @media (max-width: 640px) {
+        /* #stepControl too: its own .btn-block rule outranks a bare class. */
+        .uci-bar-action, #stepControl .uci-bar-action { min-width: 0 !important; padding: 10px 26px !important; }
+        #uci-stepbar .uci-sb-inner { padding-right: calc(var(--uci-sb-r, 16px) + 118px); }
+      }
+      #uci-stepbar .uci-sb-sub { font-size: 12px; color: #8b97a8;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+      /* Compact performance header (see compactPerfInfo): title with a
+         version chip, then date, time and cinema on one line. UCI's own
+         three lines are hidden only once ours exists. */
+      #booking-info .right-item:has(#uci-perf-info) > :is(.performance-date-and-time,
+        .cinema-name-and-auditorium, .film-version) { display: none !important; }
+      #uci-perf-info .uci-pi-title { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;
+        font-size: 15px; font-weight: 700; color: #fff; line-height: 1.3; }
+      #uci-perf-info .uci-pi-version { font-size: 10px; font-weight: 700; letter-spacing: .03em;
+        padding: 1px 6px; border-radius: 3px; line-height: 1.4;
+        background: rgba(79,157,222,.18); color: #8fc4f0; border: 1px solid rgba(79,157,222,.6); }
+      #uci-perf-info .uci-pi-when { font-size: 12.5px; color: #8b97a8; margin-top: 3px; }
+      #uci-perf-info .uci-pi-when b { color: #cfd6e0; font-weight: 600; }
       /* Explains the greyed-out button — see updateStepHint(). */
       #uci-step-hint { display: block; margin-top: 6px; font-size: 12px; color: #8b97a8; }
       #uci-step-hint[hidden] { display: none; }
@@ -268,6 +465,8 @@
       #uci-secondary-toggle {
         display: block; width: 100%; text-align: left; background: none; border: none;
         color: #8b97a8; font-size: 12px; cursor: pointer; padding: 6px 2px; min-height: 0;
+        /* The site's button CSS uppercases it (seen live). */
+        text-transform: none !important;
       }
       #uci-secondary-toggle:hover { color: #cfd6e0; }
       #uci-secondary-toggle::before { content: '▸ '; }
@@ -435,6 +634,10 @@
          purpose obvious. */
       #booking-header #stepBackLinkText { display: none !important; }
       #booking-header #stepBackLink::after { content: 'Zurück'; }`;
+    // media, not .disabled: disabled is ignored until the sheet exists,
+    // and this may run before <head> does.
+    if (scriptOff) style.media = 'not all';
+    layoutStyle = style;
     (document.head || document.documentElement).appendChild(style);
   })();
 
@@ -741,7 +944,7 @@
 
   // ------------------------------------------------------------- orchestrate
   let running = false;
-  let advanceArmed = false;   // set only by the EINLÖSEN button, cleared on use
+  let advanceArmed = false;   // set only by EINLÖSEN or the WebMCP redeem tool, cleared on use
 
   function makeProgress(total) {
     let done = 0, tot = total;
@@ -756,9 +959,11 @@
     };
   }
 
+  // Resolves with one { name, ok, seat, note } per card, for the WebMCP
+  // redeem tool; the panel itself only uses what's shown along the way.
   async function runQueue(queue) {
-    if (!getBook()) { ui.hint('Buchungsseite nicht bereit (window.book fehlt)', true); return; }
-    if (!bpid()) { ui.hint('Keine aktive Buchung — bitte zuerst Plätze wählen', true); return; }
+    if (!getBook()) { ui.hint('Buchungsseite nicht bereit (window.book fehlt)', true); return []; }
+    if (!bpid()) { ui.hint('Keine aktive Buchung — bitte zuerst Plätze wählen', true); return []; }
 
     running = true;
     ui.hint('', true);          // clear any sticky message from the last run
@@ -766,6 +971,7 @@
     const prog = makeProgress(queue.reduce((s, p) => s + (p.own ? 1 : 2), 0));
     const t0 = performance.now();
     let ok = 0;
+    const results = [];
 
     for (let i = 0; i < queue.length; i++) {
       const p = queue[i];
@@ -773,6 +979,7 @@
       const rep = ui.reporterFor(p);
       ui.log(`— ${p.name} (${mask(p.code)})`, 'info');
       const r = await redeemOne(p, rep, prog);
+      results.push({ name: p.name, ok: r.ok, seat: r.seat || null, note: r.note || null });
       if (r.ok) {
         ok++;
         ui.set(p.id, 'ok', `${r.seat}${r.note ? ' · ' + r.note : ''}`);
@@ -807,6 +1014,7 @@
     } else {
       ui.hint(`${queue.length - ok} von ${queue.length} Karten fehlgeschlagen — siehe Details oben.`, true);
     }
+    return results;
   }
 
   async function redeemAll(people) {
@@ -818,7 +1026,7 @@
       seen.add(k); queue.push(p);
     }
     ui.log(`Starte mit ${queue.length} Karte(n)`, 'info');
-    await runQueue(queue);
+    return runQueue(queue);
   }
 
   // Scrolls to the "Weiter" (checkout) button. Deliberately does NOT press
@@ -892,9 +1100,17 @@
   // "ABSCHLUSS & ZAHLUNGSMITTEL WÄHLEN" is the button's native label —
   // shortened once it's rendered, rather than templated in from scratch,
   // so nothing here depends on guessing the button's full native markup.
+  // The native markup is kept so setScriptOff can put it back.
+  const nativeCheckoutHTML = new WeakMap();
   function renameCheckoutButton() {
     const btn = document.getElementById('init-checkout-process-button');
-    if (btn && btn.textContent.trim() !== 'Weiter') btn.textContent = 'Weiter';
+    if (!btn || btn.textContent.trim() === 'Weiter') return;
+    nativeCheckoutHTML.set(btn, btn.innerHTML);
+    btn.textContent = 'Weiter';
+  }
+  function restoreCheckoutButton() {
+    const btn = document.getElementById('init-checkout-process-button');
+    if (btn && nativeCheckoutHTML.has(btn)) btn.innerHTML = nativeCheckoutHTML.get(btn);
   }
 
   // The seat step's Weiter stays disabled until tickets and seats are
@@ -972,6 +1188,234 @@
     if (preferred === 'paypal') paypal.click();
     else if (preferred === 'kreditkarte') cc.click();
   }
+
+  // Compact header: "Finding Emily [OmU]" / "Sa 10.10. · 11:30 · East
+  // Side Gallery · Kino 07", built from UCI's own #booking-info lines
+  // (date "10.10.2026 | 11:30", cinema "UCI East Side Gallery | Kino 07",
+  // version "Vorstellung in Originalsprache mit Untertiteln") and the film
+  // title that the merged top bar no longer shows ("Finding Emily (OmU)").
+  // Text is set via textContent, never parsed as HTML.
+  const WEEKDAY_DE = new Intl.DateTimeFormat('de-DE', { weekday: 'short' });
+  // Also read by the WebMCP booking-state tool, so separate from the DOM
+  // work; the native lines it reads stay in the DOM next to our box.
+  function readPerfInfo() {
+    const right = document.querySelector('#booking-info .right-item');
+    if (!right) return null;
+    // :scope > — the native lines only; a looser match could pick up text
+    // from inside our own #uci-perf-info.
+    const text = (sel) => right.querySelector(`:scope > ${sel}`)?.textContent.replace(/\s+/g, ' ').trim() || '';
+    const dt = text('.performance-date-and-time');
+    // Until the booking loads, UCI shows "Datum und Zeit werden geladen...".
+    if (!dt || /geladen/i.test(dt)) return null;
+
+    let title = document.querySelector('#booking-header .filmTitle')?.textContent.trim() || '';
+    let version = '';
+    const suffix = title.match(/\s*\((OV|OmU|OmeU|OmdU)\)\s*$/i);
+    if (suffix) { version = suffix[1]; title = title.slice(0, suffix.index); }
+    if (!version) {
+      const v = text('.film-version');
+      version = /englisch/i.test(v) ? 'OmeU' : /untertitel/i.test(v) ? 'OmU' : /original/i.test(v) ? 'OV' : '';
+    }
+
+    const m = dt.match(/(\d{1,2})\.(\d{1,2})\.(\d{4})\s*\|?\s*(\d{1,2}:\d{2})?/);
+    let when = dt;
+    if (m) {
+      const wd = WEEKDAY_DE.format(new Date(+m[3], +m[2] - 1, +m[1])).replace('.', '');
+      when = `${wd} ${m[1].padStart(2, '0')}.${m[2].padStart(2, '0')}.` + (m[4] ? ` · ${m[4]}` : '');
+    }
+    const where = text('.cinema-name-and-auditorium').replace(/^UCI\s+/i, '').replace(/\s*\|\s*/g, ' · ');
+    return { title, version, when, where };
+  }
+  // UCI first renders placeholders ("Filmtitel wird geladen...", "Datum
+  // und Zeit werden geladen...") and fills them in later; built from those,
+  // the header stayed on them (seen live). So nothing is built while any
+  // part still says "geladen", and it's rebuilt whenever the parts change.
+  function compactPerfInfo() {
+    const right = document.querySelector('#booking-info .right-item');
+    if (!right) return;
+    const info = readPerfInfo();
+    const sig = info ? [info.title, info.version, info.when, info.where].join('|') : '';
+    const existing = right.querySelector('#uci-perf-info');
+    if (existing && existing.dataset.sig === sig) return;
+    existing?.remove();
+    if (!info || /geladen/i.test(sig)) return;
+    const { title, version, when, where } = info;
+
+    const box = document.createElement('div');
+    box.id = 'uci-perf-info';
+    box.dataset.sig = sig;
+    if (title || version) {
+      const t = document.createElement('div');
+      t.className = 'uci-pi-title';
+      if (title) t.append(title);
+      if (version) {
+        const chip = document.createElement('span');
+        chip.className = 'uci-pi-version';
+        chip.textContent = version;
+        t.append(chip);
+      }
+      box.append(t);
+    }
+    const w = document.createElement('div');
+    w.className = 'uci-pi-when';
+    const b = document.createElement('b');
+    b.textContent = when;
+    w.append(b);
+    if (where) w.append(' · ' + where);
+    box.append(w);
+    right.prepend(box);
+  }
+
+  // Erwachsener price per price category, appended to the seat-map legend
+  // ("PK 1 · 16,90 €"). From seatsAndTickets.json, the same read-only
+  // request UCI's seat map makes (params as in docs/API.md and
+  // archive/seat-map.js): sections[].name is exactly the legend's label
+  // text, prices[] holds each ticket type's amount per category. Fetched
+  // once, on the seat step only; on failure the legend just has no prices.
+  let legendPrices = null;   // null = not loaded, Map once loaded or failed
+  let legendPricesLoading = false;
+  async function loadLegendPrices() {
+    const id = bpid();
+    if (!id || legendPricesLoading) return;
+    legendPricesLoading = true;
+    try {
+      const params = new URLSearchParams({
+        bookingProcessId: id, allowCache: 'false',
+        instanceId: String(Math.floor(Math.random() * 90000) + 10000),
+        verboseSeatInfo: 'false', noRefresh: 'false', advancedFormat: '1',
+        reason: 'Get seats and tickets data', _: String(Date.now()),
+      });
+      const res = await fetch(`/TicketBoxXNG/seatsAndTickets.json?${params}`, {
+        credentials: 'same-origin',
+        headers: { accept: 'application/json, text/javascript, */*; q=0.01', 'x-requested-with': 'XMLHttpRequest' },
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      legendPrices = new Map((data.sections || []).map((sec) => {
+        const p = (sec.prices || []).find((x) => /^erwachsen/i.test(x.nameOrg || x.name || '')) || (sec.prices || [])[0];
+        return [String(sec.name || '').trim(), p ? p.amount : null];
+      }).filter(([name, amount]) => name && typeof amount === 'number'));
+    } catch (err) {
+      console.warn(TAG, 'Legend prices not loaded:', err.message);
+      legendPrices = new Map();
+    }
+    legendPricesLoading = false;
+    annotateLegend();
+  }
+  function annotateLegend() {
+    if (scriptOff) return;
+    if (legendPrices === null) {
+      if (rendered(document.getElementById('SeatingPlanComponentLayoutFooter'))) loadLegendPrices();
+      return;
+    }
+    document.querySelectorAll('#SeatingPlanComponentLayoutFooter > div > div > div > div:last-child').forEach((label) => {
+      if (label.querySelector('.uci-legend-price')) return;
+      const amount = legendPrices.get((label.firstChild?.textContent || '').trim());
+      if (amount == null) return;
+      const span = document.createElement('span');
+      span.className = 'uci-legend-price';
+      span.textContent = ' · ' + amount.toFixed(2).replace('.', ',') + ' €';
+      label.append(span);
+    });
+  }
+
+  // Bottom bar for the seat, payment and confirm steps (CSS above). Each
+  // step is recognized by its own button being rendered: UCI hides each
+  // step's button once the next step shows (checked live on all three);
+  // on any other step its own #customer-cart bar takes over again. The
+  // confirm step's JETZT KAUFEN is a submit button inside its terms form,
+  // and stays inside it — only positioned — so submitting is unchanged;
+  // it's disabled until the terms are accepted. The free
+  // variant (#payment-type-free-content, shown instead when cards cover
+  // the whole price) is assumed, not yet seen live. Re-rendered on every
+  // change to the cart (cartObserver) and every poll tick, which also
+  // re-aligns it.
+  const rendered = (el) => !!el && el.getClientRects().length > 0;
+  function stepAction() {
+    const seat = document.getElementById('nextStepButton') || document.querySelector('#stepControl .btn-block');
+    if (rendered(seat)) {
+      return { step: 'seats', btn: seat, column: document.getElementById('StepSeatingLayout'), hint: 'Erst Tickets und Plätze wählen' };
+    }
+    const pay = [document.getElementById('init-checkout-process-button'),
+      ...document.querySelectorAll('#payment-type-free-content .btn')].find(rendered);
+    // The cards' own edges, not #payment-selection: that .container has 15px
+    // of padding, which put the bar's text and button 13–15px outside the
+    // cards (measured live).
+    if (pay) return { step: 'payment', btn: pay, column: document.getElementById('payment-type-accordion'), hint: '' };
+    const buy = document.getElementById('jetzt-kaufen-button');
+    if (rendered(buy)) {
+      return { step: 'confirm', btn: buy, column: document.getElementById('payment-confirmation-agb-acceptance'), hint: 'Erst die Nutzungsbedingungen akzeptieren' };
+    }
+    return null;
+  }
+  let cartObserver = null;
+  function updateStepBar() {
+    if (scriptOff) return;
+    const action = stepAction();
+    const root = document.documentElement;
+    document.querySelectorAll('.uci-bar-action').forEach((b) => {
+      if (!action || b !== action.btn) b.classList.remove('uci-bar-action', 'uci-bar-action--muted');
+    });
+    root.classList.toggle('uci-bar', !!action);
+    let bar = document.getElementById('uci-stepbar');
+    if (!action) { bar?.remove(); return; }
+    action.btn.classList.add('uci-bar-action');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = 'uci-stepbar';
+      bar.innerHTML = '<div class="uci-sb-inner"><div class="uci-sb-sum"></div><div class="uci-sb-sub"></div></div>';
+      document.body.appendChild(bar);
+    }
+
+    const r = action.column && action.column.getBoundingClientRect();
+    if (r && r.width) {
+      root.style.setProperty('--uci-sb-l', Math.max(16, Math.round(r.left)) + 'px');
+      root.style.setProperty('--uci-sb-r', Math.max(16, Math.round(window.innerWidth - r.right)) + 'px');
+    }
+
+    const cart = document.getElementById('customer-cart');
+    if (cart && !cartObserver) {
+      cartObserver = new MutationObserver(updateStepBar);
+      cartObserver.observe(cart, { childList: true, subtree: true, characterData: true });
+    }
+    const count = cart?.querySelector('.customer-cart-ticket-counter')?.textContent.trim() || '';
+    // "18.40 €", or "0.00 € (9.90 €)" once cards cover it (confirm step).
+    const total = (cart?.querySelector('.customer-cart-total-price')?.textContent.trim() || '')
+      .replace(/(\d)\.(\d\d)/g, '$1,$2').replace(/\(\s*(?=\d)/, '(statt ');
+    // "PK 1 LOGE | Reihe 2 | Sitz 11" per seat → "Reihe 2: Sitz 11, 12".
+    const rows = new Map();
+    cart?.querySelectorAll('.cart-content-sub-header').forEach((h) => {
+      const sm = h.textContent.match(/Reihe\s*(\S+)\s*\|\s*Sitz\s*(\S+)/i);
+      if (sm) rows.set(sm[1], [...(rows.get(sm[1]) || []), sm[2]]);
+    });
+    const seats = [...rows].map(([row, nums]) => `Reihe ${row}: Sitz ${nums.join(', ')}`).join(' · ');
+    const hasTickets = !!count && !/^0\b/.test(count);
+    const sum = hasTickets ? [count, total].filter(Boolean).join(' · ') : 'Noch keine Tickets';
+    let sub = action.btn.disabled && action.hint ? action.hint : seats;
+
+    // Payment step: cards ticked in the panel but not redeemed yet (or
+    // being redeemed right now) → warn and outline Weiter. Read from the
+    // panel and basket(), which work through pageBridge on iPhone too.
+    let warn = false;
+    if (action.step === 'payment' && panel.isConnected) {
+      const b = basket();
+      const ticked = panel.querySelectorAll('#uci-list input[type=checkbox]:checked:not([data-applied])').length;
+      if (running) {
+        warn = true; sub = 'Unlimited Cards werden eingelöst…';
+      } else if (b && b.open > 0 && ticked > 0) {
+        const n = Math.min(ticked, b.open);
+        warn = true;
+        sub = `${n} Unlimited Card${n === 1 ? '' : 's'} noch nicht eingelöst — sonst ${eur(b.due)} fällig`;
+      }
+    }
+    action.btn.classList.toggle('uci-bar-action--muted', warn);
+    bar.classList.toggle('uci-sb-warn', warn);
+
+    const sumEl = bar.querySelector('.uci-sb-sum'), subEl = bar.querySelector('.uci-sb-sub');
+    if (sumEl.textContent !== sum) sumEl.textContent = sum;
+    if (subEl.textContent !== sub) subEl.textContent = sub;
+  }
+  window.addEventListener('resize', () => { if (!scriptOff) updateStepBar(); });
 
   // Runs take 30–50s; you will have tabbed away by the time it finishes.
   let origTitle = null;
@@ -1151,11 +1595,12 @@
       el.textContent = 'Buchungsdaten nicht lesbar — Seite neu laden.'; return;
     }
     if (!b) { el.textContent = 'Noch kein Warenkorb — bitte zuerst Plätze wählen.'; return; }
-    const parts = [`<b>${b.n}</b> Ticket${b.n === 1 ? '' : 's'}`];
+    // Ticket count and total are in the bottom bar now (updateStepBar);
+    // this keeps what matters for redeeming.
+    const parts = [];
     if (b.unlimited) parts.push(`<b>${b.unlimited}</b> mit Unlimited`);
     if (b.free) parts.push(`<b>${b.free}</b> mit Movie Points`);
     parts.push(`<b>${b.open}</b> zu zahlen`);
-    parts.push(`<b>${eur(b.due)}</b>`);
     el.innerHTML = parts.join(' · ') +
       (lastFee ? `<span class="fee">zzgl. ${eur(lastFee)} Buchungsgebühr</span>` : '');
     enforceCap();
@@ -1188,6 +1633,7 @@
     ui.hint(checked.length > limit
       ? `Nur ${seatsWord(limit)} — bitte Auswahl reduzieren.`
       : checked.length === limit && limit > 0 ? `Maximum erreicht (${seatsWord(limit)}).` : '');
+    updateStepBar();   // its "noch nicht eingelöst" warning follows the ticks
   }
 
   // Cards already on the booking (reload, partial run, manual redemption)
@@ -1208,12 +1654,18 @@
     });
   }
 
-  function renderList() {
+  // Your own card (from the logged-in account) first, then the saved ones.
+  function cardRows() {
     const b = getBook();
     const rows = [];
     if (b && b.unlimitedCustomerNumber)
       rows.push({ id: 'own', name: 'Ich', code: b.unlimitedCustomerNumber, own: true });
     loadCards().forEach((c, i) => rows.push({ id: 'c' + i, name: c.name, code: c.code, idx: i }));
+    return rows;
+  }
+
+  function renderList() {
+    const rows = cardRows();
 
     const prev = panel._rows || [];
     if (prev.length === rows.length && prev.every((r, i) => r.id === rows[i].id && r.code === rows[i].code))
@@ -1418,6 +1870,7 @@
   }
 
   function mountTicketSelector() {
+    if (scriptOff) return false;
     const container = findActiveTicketContainer();
     if (!container) return false;
 
@@ -1454,7 +1907,7 @@
   // only relevant once checkout is reached. Leaving mounted false here
   // just means poll() below calls tryMount() again next tick.
   function tryMount() {
-    if (mounted) return;
+    if (mounted || scriptOff) return;
     const host = document.querySelector(HOST_SEL);
     if (!host) return;
     host.insertBefore(panel, host.firstChild);
@@ -1464,9 +1917,173 @@
     wire();
   }
 
+  // ---------------------------------------------------------------- WebMCP
+  // Booking-page tools (see webmcp at the top). Seat choice, "Weiter" and
+  // payment stay with the user; the agent can read the booking and redeem
+  // Unlimited cards, your own and saved friends', on the payment step.
+  const normName = (n) => String(n || '').normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase();
+  const OWN_ALIASES = new Set(['ich', 'me', 'myself', 'self', 'own', 'mine']);
+
+  function cardsForAgent() {
+    const rows = localRows();
+    return cardRows().map((p) => {
+      const applied = appliedRow(rows, p.code);
+      return { name: p.name, own: !!p.own, card: mask(p.code),
+        redeemed: !!applied, seat: applied ? seatLabel(applied) : null };
+    });
+  }
+
+  // Agent-requested redemption always waits for a click here. Built with
+  // textContent only: card names come from saved/imported JSON.
+  function confirmAgentRedeem(people) {
+    return new Promise((resolve) => {
+      document.getElementById('uci-mcp-confirm')?.remove();
+      const box = document.createElement('div');
+      box.id = 'uci-mcp-confirm';
+      box.innerHTML = `
+        <style>
+          #uci-mcp-confirm{position:fixed;inset:0;z-index:2147483000;background:rgba(0,0,0,.6);
+            display:flex;align-items:center;justify-content:center;padding:16px;
+            font:14px/1.45 system-ui,-apple-system,sans-serif}
+          #uci-mcp-confirm .dlg{background:#0b1a3a;color:#e8edf3;border:1px solid rgba(255,255,255,.18);
+            border-radius:8px;padding:16px 18px;max-width:360px;width:100%;box-shadow:0 10px 40px rgba(0,0,0,.5)}
+          #uci-mcp-confirm .t{font-weight:700;margin-bottom:4px}
+          #uci-mcp-confirm .perf{font-size:12.5px;color:#98a4b3;margin-bottom:10px}
+          #uci-mcp-confirm ul{margin:0 0 14px;padding:0;list-style:none}
+          #uci-mcp-confirm li{display:flex;justify-content:space-between;gap:10px;padding:3px 0;
+            border-bottom:1px solid rgba(255,255,255,.08)}
+          #uci-mcp-confirm li span:last-child{color:#98a4b3;font-family:ui-monospace,monospace;font-size:12px}
+          #uci-mcp-confirm .btns{display:flex;gap:8px;justify-content:flex-end}
+          /* site-wide button min-height:45px (CLAUDE.md) */
+          #uci-mcp-confirm button{min-height:0;border:0;border-radius:5px;padding:8px 14px;
+            font-weight:700;font-size:13px;cursor:pointer;background:rgba(255,255,255,.12);color:#e8edf3}
+          #uci-mcp-confirm button.yes{background:#fff101;color:#000}
+        </style>
+        <div class="dlg" role="dialog" aria-modal="true">
+          <div class="t"></div><div class="perf"></div><ul></ul>
+          <div class="btns"><button type="button" data-a="0">Abbrechen</button>
+            <button type="button" class="yes" data-a="1">Einlösen</button></div>
+        </div>`;
+      box.querySelector('.t').textContent = `KI-Assistent: ${people.length === 1 ? '1 Unlimited Card'
+        : people.length + ' Unlimited Cards'} einlösen?`;
+      const info = readPerfInfo();
+      box.querySelector('.perf').textContent = info
+        ? [info.title + (info.version ? ` (${info.version})` : ''), info.when].filter(Boolean).join(' · ') : '';
+      const ul = box.querySelector('ul');
+      people.forEach((p) => {
+        const li = document.createElement('li');
+        const n = document.createElement('span'); n.textContent = p.name;
+        const c = document.createElement('span'); c.textContent = mask(p.code);
+        li.append(n, c); ul.append(li);
+      });
+      const done = (yes) => { box.remove(); resolve(yes); };
+      box.querySelectorAll('button').forEach((b) => { b.onclick = () => done(b.dataset.a === '1'); });
+      box.addEventListener('click', (e) => { if (e.target === box) done(false); });
+      document.body.appendChild(box);
+      box.querySelector('button.yes').focus();
+    });
+  }
+
+  function registerBookingTools() {
+    webmcp.register([
+      {
+        name: 'get_booking_state',
+        title: 'Buchung lesen',
+        description: 'Read the current UCI cinema booking: which step it is on (seats, payment, confirm), '
+          + 'the film and showing, the seats in the basket with what covers each one, and the amount still to pay. '
+          + 'The user is logged in. Seats are picked by the user on the native seat map; '
+          + 'Unlimited cards can only be redeemed on the payment step.',
+        inputSchema: { type: 'object', properties: {} },
+        annotations: { readOnlyHint: true },
+        run: () => {
+          const names = new Map(cardRows().map((p) => [p.code.trim(), p.name]));
+          const b = basket();
+          return {
+            step: stepAction()?.step || 'other',
+            showing: readPerfInfo(),
+            seats: localRows().map((r) => ({
+              seat: seatLabel(r), price: r.amount,
+              coveredBy: r.unlimitedTicket
+                ? 'Unlimited: ' + (names.get((r.unlimitedTicketCardNo || '').trim()) || 'andere Karte')
+                : r.freeTicket ? 'Movie Points' : null,
+            })),
+            basket: b && { tickets: b.n, unlimited: b.unlimited, moviePoints: b.free,
+              seatsToPay: b.open, amountDue: Math.round(b.due * 100) / 100, bookingFee: lastFee },
+            canRedeemUnlimited: stepAction()?.step === 'payment' && !scriptOff && !!b && b.open > 0,
+          };
+        },
+      },
+      {
+        name: 'list_unlimited_cards',
+        title: 'Unlimited Cards',
+        description: 'List the Unlimited cards better-uci can redeem: the logged-in user\'s own card ("Ich") '
+          + 'and saved friends\' cards, by name, with a masked card number and whether each is already '
+          + 'redeemed on this booking (and on which seat).',
+        inputSchema: { type: 'object', properties: {} },
+        annotations: { readOnlyHint: true },
+        run: () => ({ cards: cardsForAgent() }),
+      },
+      {
+        name: 'redeem_unlimited_cards',
+        title: 'Unlimited Cards einlösen',
+        description: 'Redeem Unlimited cards on this booking, one seat per card, the user\'s own and/or saved '
+          + 'friends\'. Pass card names exactly as list_unlimited_cards returns them ("Ich" is the user\'s own). '
+          + 'Only works on the payment step, with no more cards than seats still to pay. The user has to '
+          + 'confirm in a dialog on the page first. Does not check out: afterwards the user presses "Weiter".',
+        inputSchema: {
+          type: 'object',
+          properties: { names: { type: 'array', items: { type: 'string' }, minItems: 1,
+            description: 'Card names from list_unlimited_cards' } },
+          required: ['names'],
+        },
+        annotations: { consequentialHint: true },
+        run: async ({ names }) => {
+          if (scriptOff) throw new Error('better-uci is switched off on this page.');
+          // Not `mounted`: the panel mounts into the payment section while
+          // it's still hidden, on the seat step already (seen live).
+          if (stepAction()?.step !== 'payment' || !mounted)
+            throw new Error('Not on the payment step yet. The user has to pick seats and continue first.');
+          if (running) throw new Error('A redemption is already running.');
+          if (!Array.isArray(names) || !names.length) throw new Error('names must list at least one card name.');
+          const all = cardRows();
+          const people = [];
+          for (const raw of names) {
+            const n = normName(raw);
+            const hits = OWN_ALIASES.has(n) ? all.filter((p) => p.own) : all.filter((p) => normName(p.name) === n);
+            if (!hits.length) throw new Error(`No card named "${raw}". Available: ${all.map((p) => p.name).join(', ') || 'none'}.`);
+            if (hits.length > 1) throw new Error(`More than one card is named "${raw}"; the user has to rename one.`);
+            if (!people.includes(hits[0])) people.push(hits[0]);
+          }
+          const rows = localRows();
+          const todo = people.filter((p) => !appliedRow(rows, p.code));
+          const b = basket();
+          if (!b) throw new Error('No basket yet.');
+          if (todo.length > b.open)
+            throw new Error(`Only ${b.open} seat(s) left to pay, but ${todo.length} card(s) not yet redeemed were given.`);
+          if (!todo.length) return { results: [], note: 'All of these cards are already redeemed.', cards: cardsForAgent() };
+          if (!(await confirmAgentRedeem(todo))) return { cancelled: true, note: 'The user cancelled.' };
+          if (running) throw new Error('A redemption is already running.');
+          advanceArmed = true;
+          const results = await redeemAll(todo);
+          const after = basket();
+          return {
+            results,
+            seatsToPay: after ? after.open : null,
+            amountDue: after ? Math.round(after.due * 100) / 100 : null,
+            next: 'The user presses "Weiter" to check out and pay; this tool never does.',
+          };
+        },
+      },
+    ]);
+  }
+
+  // One poll() pass; set up in boot(), also run by setScriptOff.
+  let tick = () => {};
+
   (function boot() {
     if (!document.body) return setTimeout(boot, 200);
     tryMount();
+    registerBookingTools();
 
     // The poll() loop below only ticks every 1.5s, and it's shared with
     // several unrelated concerns (card list, basket sync) that don't need
@@ -1499,8 +2116,9 @@
         ui.log('Interner Fehler — ' + msg, 'err');
       }
     };
-    (function poll() {
-      setTimeout(poll, 1500);
+    tick = () => {
+      ensureOffToggle();
+      if (scriptOff) return;
       step('mount', () => { if (!panel.isConnected) { mounted = false; tryMount(); } });
       step('tickets', mountTicketSelector);
       step('voucherHint', annotateEmptyVoucherPanel);
@@ -1512,6 +2130,9 @@
       });
       step('extras', setupLeanPaymentExtras);
       step('checkoutButton', renameCheckoutButton);
+      step('perfInfo', compactPerfInfo);
+      step('stepBar', updateStepBar);
+      step('legendPrices', annotateLegend);
       step('diag', () => {
         const d = `book:${getBook() ? 'ok' : '—'} bpid:${bpid() ? 'ok' : '—'} Seite:${pageAccess()} Speicher:${store.kind}`;
         ui.diag(d);
@@ -1531,8 +2152,85 @@
         }
         updateBasket();
       });
+    };
+    (function poll() {
+      setTimeout(poll, 1500);
+      tick();
     })();
   })();
+
+  // Undoes, in place, everything this script changes on the booking page:
+  // its stylesheet (layout, header, payment step), its own UI (card panel,
+  // ticket picker, step hint, "leer" badge, Movie Points toggle), the
+  // hidden native Unlimited Card form and the renamed checkout button.
+  // poll() pauses meanwhile. Not undone: accordion sections it opened
+  // stay open, and a payment method it pre-selected stays selected.
+  // Switching back on runs one tick right away, which re-applies it all.
+  function setScriptOff(off) {
+    scriptOff = off;
+    store.set(OFF_KEY, off);
+    if (layoutStyle) layoutStyle.media = off ? 'not all' : '';
+    if (off) {
+      if (ticketObserver) ticketObserver.disconnect();
+      panel.remove();
+      mounted = false;
+      if (cartObserver) { cartObserver.disconnect(); cartObserver = null; }
+      ['uci-tickets', 'uci-step-hint', 'uci-secondary-toggle', 'uci-perf-info', 'uci-stepbar']
+        .forEach((id) => document.getElementById(id)?.remove());
+      document.querySelectorAll('.uci-legend-price').forEach((p) => p.remove());
+      document.documentElement.classList.remove('uci-bar');
+      document.querySelectorAll('.uci-bar-action').forEach((b) => b.classList.remove('uci-bar-action', 'uci-bar-action--muted'));
+      ['--uci-sb-l', '--uci-sb-r'].forEach((v) => document.documentElement.style.removeProperty(v));
+      document.querySelectorAll('.uci-secondary-card')
+        .forEach((c) => c.classList.remove('uci-secondary-card', 'uci-secondary-hidden'));
+      document.querySelectorAll('.uci-empty-badge').forEach((b) => {
+        delete b.parentElement.dataset.uciAnnotated;
+        b.remove();
+      });
+      restoreCheckoutButton();
+      setNativeVisible(true);
+    }
+    tick();
+  }
+
+  // Centered and fixed rather than placed inside #uci-header's row: the
+  // middle of the top bar is empty both in the merged header and in UCI's
+  // own (logo left, account name right), and a fixed pill doesn't depend
+  // on that row's markup. Its own always-on stylesheet, since the main one
+  // is switched off with the script; min-height:0 against the site's
+  // global button min-height:45px (see CLAUDE.md).
+  function ensureOffToggle() {
+    if (!document.body) return;
+    let btn = document.getElementById('uci-off-toggle');
+    if (!btn) {
+      const style = document.createElement('style');
+      style.textContent = `
+        /* text-transform: the site's button CSS uppercased it ("BETTER-UCI:
+           AN", seen live), which read like a main action, not a utility. */
+        #uci-off-toggle{position:fixed;top:4px;left:50%;transform:translateX(-50%);z-index:2147483647;
+          min-height:0 !important;height:auto;margin:0;padding:1px 8px;border-radius:10px;
+          border:1px solid rgba(255,255,255,.14);background:transparent;color:#6b7684;
+          font:500 10.5px/1.4 -apple-system,system-ui,sans-serif;letter-spacing:0;
+          text-transform:none !important;cursor:pointer}
+        #uci-off-toggle:hover{color:#cfd6e0;border-color:rgba(255,255,255,.35)}
+        #uci-off-toggle.off{background:rgba(255,255,255,.92);color:#333;border-color:rgba(0,0,0,.25)}
+        #uci-off-toggle:disabled{opacity:.5;cursor:default}`;
+      document.head.appendChild(style);
+      btn = document.createElement('button');
+      btn.type = 'button';
+      btn.id = 'uci-off-toggle';
+      btn.onclick = () => { if (!running) setScriptOff(!scriptOff); };
+      document.body.appendChild(btn);
+    }
+    const label = scriptOff ? 'better-uci: aus' : 'better-uci: an';
+    if (btn.textContent !== label) btn.textContent = label;
+    btn.classList.toggle('off', scriptOff);
+    // Not mid-redemption: the panel showing that run's progress would vanish.
+    btn.disabled = running && !scriptOff;
+    btn.title = btn.disabled ? 'Während des Einlösens nicht möglich'
+      : scriptOff ? 'Änderungen von better-uci wieder einschalten'
+      : 'Alle Änderungen von better-uci auf dieser Seite ausschalten';
+  }
   }
 
   function initBrowse() {
@@ -1550,9 +2248,12 @@
     (function hideEarly() {
       if (!document.documentElement) { setTimeout(hideEarly, 0); return; }
       const earlyStyle = document.createElement('style');
+      // Off while html.ub-native is set ("Original-Ansicht zeigen"): with
+      // !important, no inline style could bring the native page back.
       earlyStyle.textContent = `
-        .movies-grid, [data-schedule-filters-wrapper], .pimcore_area_keyvisual-kinowelt,
-        .switch-tabs, #scheduleContainerVorverkauf { display: none !important; }
+        html:not(.ub-native) :is(.movies-grid, [data-schedule-filters-wrapper],
+          .pimcore_area_keyvisual-kinowelt, .switch-tabs, #scheduleContainerVorverkauf)
+          { display: none !important; }
         #uci-browse-loading{padding:60px 20px;text-align:center;color:#8b97a8;font-size:13px}
         .ub-spinner{width:32px;height:32px;margin:0 auto 12px;border:3px solid rgba(255,255,255,.15);
           border-top-color:#fff101;border-radius:50%;animation:ub-spin .8s linear infinite}
@@ -1644,6 +2345,14 @@
     // Only the old shape was matched, so every showtime was dropped, every
     // film with it, and the page said "Kein Programm gefunden". Both are
     // read, in case UCI switches back or serves the old markup from a cache.
+    // /film/<slug>/<id>[/<cinema>/<n>] — the same id on the programme page
+    // and on /coming-soon, which is how the two are joined (titles differ
+    // between them, e.g. shortened).
+    function filmIdOf(href) {
+      const m = (href || '').match(/\/film\/[^/]+\/(\d+)/);
+      return m ? m[1] : null;
+    }
+
     function performanceIds(href) {
       const path = href.match(/performanceId\/([^/?#]+)\/siteId\/(\d+)/);
       if (path) return { perfId: path[1], siteId: path[2] };
@@ -1706,11 +2415,17 @@
         const lang = subtextEl ? subtextEl.textContent.trim() : null;   // null = standard dub
         const special = (a.dataset.special || '').trim();
 
+        // The numeric attribute-* codes, kept raw: a few mean something to
+        // us (see EVENT_CODES), most are unlabelled internal ones.
+        const codes = [...a.classList]
+          .filter((c) => /^attribute-\d+$/.test(c))
+          .map((c) => c.slice('attribute-'.length));
+
         return {
           time: a.dataset.time, date: a.dataset.date,
           auditorium: a.dataset.trackingAuditorium || '',
           perfId: ids.perfId, siteId: ids.siteId,
-          formats, lang, special,
+          formats, lang, special, codes,
         };
       }).filter(Boolean);
 
@@ -1719,7 +2434,7 @@
       // description) — kept so our poster+title can link there too.
       const filmLink = card.querySelector('.film-container__description__text__eventtitle a');
       const href = filmLink ? filmLink.getAttribute('href') : null;
-      return { title, runtime, genre, fsk, poster, href, isNew, showtimes };
+      return { title, runtime, genre, fsk, poster, href, filmId: filmIdOf(href), isNew, showtimes };
     }
 
     // The native page can carry the same film in more than one container
@@ -1752,11 +2467,13 @@
     // plays within the window. German releases start on Thursdays: a film
     // whose first remaining showing comes before the next Thursday is in
     // its first week already ("Neu"), one starting later opens this week
-    // ("Start 08.10."; the weekday only in the tooltip). Earliest showing over all showtimes, ignoring
+    // ("Start 08.10."; the weekday only in the tooltip). The official start
+    // from /coming-soon when known, so a preview doesn't pass for the
+    // start; otherwise the earliest showing over all showtimes, ignoring
     // Nur OV, so the badge doesn't change with the filter.
-    function freshness(film, days) {
+    function freshness(film, days, start) {
       if (!film.isNew) return null;
-      const first = film.showtimes.reduce((m, s) => (s.date < m ? s.date : m), '99999999');
+      const first = start || film.showtimes.reduce((m, s) => (s.date < m ? s.date : m), '99999999');
       if (first > days[days.length - 1].str) return null;
       const today = new Date();
       const nextThu = new Date(today);
@@ -1766,6 +2483,30 @@
       const date = `${first.slice(6, 8)}.${first.slice(4, 6)}.`;
       return { label: 'Start ' + date, tip: `Startet ${WEEKDAY.format(d)} ${date}`, upcoming: true };
     }
+
+    // Showtime codes UCI labels (tooltips on its own attribute badges):
+    // 289 "UCI Events" (concerts, Royal Ballet & Opera, live shows), 619
+    // "Sonderveranstaltung" (also a live podcast that has no 289).
+    const EVENT_CODES = new Set(['289', '619']);
+
+    // Screening-level kinds: they describe one showing, not the film.
+    // Measured on 2026-10-05 in Hamburg Mundsburg: Women's Night (60) on 3
+    // of Der perfekte Urlaub's 104 showings, Midnight Movie (503, UCI's
+    // badge text "Midnight Movie präsentiert") on 4 of Hope's 22, previews
+    // on the dates before a film's official start. So they mark the chip;
+    // only when every showing of a film has one does it become a film
+    // badge and row edge too (A Quiet House: Midnight Movie 3 of 3).
+    // In priority order: a chip with several gets the first one's color,
+    // and labels in this order. Preview last: the 21.10. Women's Night is
+    // also a preview, and "Women's" says more about it.
+    const SCREENING_KINDS = [
+      { kind: 'womens', chip: 'Women’s', badge: 'Women’s Night', tip: 'Women’s Night',
+        test: (s) => s.codes.includes('60') },
+      { kind: 'midnight', chip: 'Midnight', badge: 'Midnight Movie', tip: 'Midnight Movie präsentiert',
+        test: (s) => s.codes.includes('503') },
+      { kind: 'preview', chip: 'Preview', badge: 'Preview', tip: 'Vorstellung vor dem offiziellen Start',
+        test: (s) => s.preview },
+    ];
 
     // -------------------------------------------------------------- render
     const panel = document.createElement('div');
@@ -1778,17 +2519,25 @@
     // Cmd/middle-click opens a booking in a new tab and chips are
     // keyboard-focusable. Every original-language showing (OV, OmU, OmeU
     // — the same set Nur OV keeps) gets .lang-orig, not just literal "OV".
+    const bookingUrl = (s) =>
+      `https://buchung.uci-kinowelt.de/?perf_id=${encodeURIComponent(s.perfId)}&site_id=${encodeURIComponent(s.siteId)}`;
     function chipMarkup(s, label, tip = label, extraClass = '') {
       const tags = [...s.formats];
       if (s.special) tags.push(s.special);
+      // Screening kinds lead the sub-line: at 60px it truncates, and they
+      // matter more than the format (was "iSense · Previe…" on a Women's
+      // Night).
+      const kinds = SCREENING_KINDS.filter((k) => s.kinds.includes(k.kind));
+      const sub = [...kinds.map((k) => k.chip), s.lang, ...tags].filter(Boolean);
+      const kindClass = kinds.length ? ' chip--' + kinds[0].kind : '';
       const premium = s.formats.length > 0;
-      const href = `https://buchung.uci-kinowelt.de/?perf_id=${encodeURIComponent(s.perfId)}&site_id=${encodeURIComponent(s.siteId)}`;
+      const href = bookingUrl(s);
       return `
-        <a class="chip${premium ? ' premium' : ''}${isOriginalLanguage(s.lang) ? ' lang-orig' : ''}${extraClass}"
+        <a class="chip${premium ? ' premium' : ''}${isOriginalLanguage(s.lang) ? ' lang-orig' : ''}${kindClass}${extraClass}"
            href="${href}"
-           title="${tip} · ${s.auditorium}${s.lang ? ' · ' + s.lang : ''}${tags.length ? ' · ' + tags.join(', ') : ''}">
+           title="${tip} · ${s.auditorium}${kinds.length ? ' · ' + kinds.map((k) => k.badge).join(', ') : ''}${s.lang ? ' · ' + s.lang : ''}${tags.length ? ' · ' + tags.join(', ') : ''}">
           <span class="chip-time">${label}</span>
-          ${(s.lang || tags.length) ? `<span class="chip-sub">${[s.lang, ...tags].filter(Boolean).join(' · ')}</span>` : ''}
+          ${sub.length ? `<span class="chip-sub">${sub.join(' · ')}</span>` : ''}
         </a>`;
     }
 
@@ -1841,15 +2590,34 @@
     function titleHTML(title) {
       return `<div class="film-title" title="${title.replace(/"/g, '&quot;')}">${title}</div>`;
     }
-    // On its own line above the title, so it never eats into the title's
-    // two clamped lines.
-    function freshBadgeHTML(fresh) {
-      if (!fresh) return '';
-      return `<div class="ub-new-line"><span class="ub-new${fresh.upcoming ? ' ub-new--upcoming' : ''}" title="${fresh.tip}">${fresh.label}</span></div>`;
+    // On their own line above the title, so they never eat into the
+    // title's two clamped lines. Set per film in render() (Demnächst rows
+    // carry none of these flags).
+    function badgesHTML(f) {
+      const badges = [];
+      if (f.fresh) badges.push([f.fresh.upcoming ? 'start' : 'new', f.fresh.label, f.fresh.tip]);
+      if (f.isEvent) badges.push(['event', 'Event', 'UCI Event / Sonderveranstaltung']);
+      if (f.isSneak) badges.push(['preview', 'Sneak', 'Sneak Preview: Überraschungsfilm']);
+      (f.allKinds || []).forEach((k) => badges.push([k.kind, k.badge, k.tip]));
+      if (!badges.length) return '';
+      return `<div class="ub-badges">${badges.map(([kind, label, tip]) =>
+        `<span class="ub-badge ub-badge--${kind}" title="${tip}">${label}</span>`).join('')}</div>`;
     }
-    // No row accent under Nur neu: every row is new then, and a yellow
-    // edge on all of them only adds noise. The badge stays.
-    const rowClass = (film) => 'film-row' + (film.fresh && !prefs.newOnly ? ' film-row--new' : '');
+    // One colored edge per row, for film-level kinds only, the most
+    // specific winning: Event (purple), a screening kind every showing has
+    // (its own color), new this week (yellow). No yellow edge under Nur
+    // neu: every row is new then, and a yellow edge on all of them only
+    // adds noise. The badges stay.
+    function rowAccent(film) {
+      if (film.isEvent) return 'event';
+      if (film.allKinds && film.allKinds.length) return film.allKinds[0].kind;
+      if (film.fresh && !prefs.newOnly) return 'new';
+      return null;
+    }
+    const rowClass = (film) => {
+      const accent = rowAccent(film);
+      return 'film-row' + (accent ? ' film-row--accent film-row--' + accent : '');
+    };
 
     const filmMeta = (film) => [film.runtime, film.fsk ? 'FSK ' + film.fsk : null, film.genre].filter(Boolean).join(' · ');
 
@@ -1861,7 +2629,7 @@
       const inner = `
           ${f.poster ? `<img class="film-thumb" src="${f.poster}" loading="lazy" alt="">` : '<div class="film-thumb film-thumb--empty"></div>'}
           <div class="ub-info">
-            ${freshBadgeHTML(f.fresh)}
+            ${badgesHTML(f)}
             ${titleHTML(f.title)}
             <div class="film-meta">${meta}</div>
           </div>`;
@@ -2056,7 +2824,7 @@
       const bookBtn = card.querySelector('.interaction-area .badge-performance');
       const bookable = !!bookBtn && !bookBtn.classList.contains('disabled');
 
-      return { title, href, poster, dateLabel, dateSort, bookable };
+      return { title, href, filmId: filmIdOf(href), poster, dateLabel, dateSort, bookable };
     }
 
     function collectComingSoon(doc) {
@@ -2127,9 +2895,11 @@
       return visible.map(comingSoonRowHTML).join('');
     }
 
-    function render() {
+    // The programme as render() shows it: films sorted, each showing's
+    // kinds and each film's badges worked out, plus the 8-day window. Also
+    // what the WebMCP tools read.
+    function programme() {
       const films = collectFilms();
-      if (!films.length) { panel.innerHTML = '<div class="ub-empty">Kein Programm gefunden.</div>'; return; }
       films.sort((a, b) => a.title.localeCompare(b.title, 'de'));
 
       const today = new Date();
@@ -2137,7 +2907,31 @@
         const d = new Date(today); d.setDate(d.getDate() + i);
         return { str: ymd(d), label: dateLabel(d, i) };
       });
-      films.forEach((f) => { f.fresh = freshness(f, days); });
+      // Official start dates from /coming-soon (prefetched on mount). Until
+      // that arrives, or if it fails, there are just no Preview badges.
+      const starts = new Map(demnaechstFilms
+        .filter((c) => c.filmId && c.dateLabel)
+        .map((c) => [c.filmId, c.dateSort]));
+      films.forEach((f) => {
+        const start = starts.get(f.filmId);
+        f.showtimes.forEach((s) => {
+          s.preview = !!start && s.date < start;
+          s.kinds = SCREENING_KINDS.filter((k) => k.test(s)).map((k) => k.kind);
+        });
+        // Over all showtimes, not just the shown ones, so a film's badge
+        // doesn't change with the tab or Nur OV.
+        f.allKinds = SCREENING_KINDS.filter((k) => f.showtimes.every((s) => s.kinds.includes(k.kind)));
+        f.isSneak = /überraschungspremiere|sneak/i.test(f.title);
+        f.isEvent = f.showtimes.some((s) => s.codes.some((c) => EVENT_CODES.has(c)));
+        // Events and the Sneak are "Neu" by nature; NEU on top is noise.
+        f.fresh = f.isEvent || f.isSneak ? null : freshness(f, days, start);
+      });
+      return { films, days };
+    }
+
+    function render() {
+      const { films, days } = programme();
+      if (!films.length) { panel.innerHTML = '<div class="ub-empty">Kein Programm gefunden.</div>'; return; }
       const visibleFilms = films.filter((f) => matchesQuery(f.title) && (!prefs.newOnly || f.fresh));
       const knownDates = new Set(days.map((d) => d.str));
 
@@ -2293,9 +3087,24 @@
     }
     let remeasured = false;
 
+    // "Original-Ansicht zeigen" used to clear only the grid's inline style,
+    // which the !important early CSS still overrode, and enforceHidden()
+    // re-hid it within a second anyway, so the button did nothing visible.
+    // Now the html.ub-native class switches off the early CSS, the
+    // matching rules in STYLE and enforceHidden(), and every element we
+    // hid is shown again.
+    const nativeShown = () => document.documentElement.classList.contains('ub-native');
     function setNativeVisible(on) {
-      const grid = document.querySelector('.movies-grid');
-      if (grid) grid.style.display = on ? '' : 'none';
+      document.documentElement.classList.toggle('ub-native', on);
+      if (on) {
+        [document.querySelector('.movies-grid'),
+          document.getElementById('scheduleContainerVorverkauf'),
+          document.querySelector('[data-schedule-filters-wrapper]'),
+          ...nativeHiddenEls].forEach((el) => { if (el) el.style.display = ''; });
+      } else {
+        enforceHidden();
+        nativeHiddenEls.forEach((el) => { el.style.display = 'none'; });
+      }
       panel.style.display = on ? 'none' : '';
       if (on) {
         const back = document.createElement('button');
@@ -2417,20 +3226,32 @@
          beside the 57px compact thumbnail along with .film-meta. */
       #uci-browse .film-title{font-weight:600;font-size:13.5px;line-height:1.3;
         overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
-      /* New this week (see freshness()): yellow badge above the title and
-         a yellow edge on the row; outlined while the film hasn't started. */
-      /* The edge sits in the panel's own 14px side padding (::before, not
-         a border or row padding): inside the row it pushed that row's
-         poster and chips 7px right of every other row. */
-      #uci-browse .film-row.film-row--new{position:relative;background:rgba(255,241,1,.035)}
-      #uci-browse .film-row.film-row--new::before{content:'';position:absolute;left:-8px;
-        top:6px;bottom:6px;width:3px;border-radius:2px;background:#fff101}
-      #uci-browse .film-row.film-row--new:hover{background:rgba(255,241,1,.07)}
-      #uci-browse .ub-new-line{line-height:1;margin-bottom:3px}
-      #uci-browse .ub-new{display:inline-block;padding:1px 5px;border-radius:3px;
-        background:#fff101;color:#000;border:1px solid #fff101;font-size:9.5px;font-weight:700;
-        line-height:1.3;letter-spacing:.03em;text-transform:uppercase}
-      #uci-browse .ub-new--upcoming{background:transparent;color:#fff101;border-color:rgba(255,241,1,.6)}
+      /* Colored row edge (see rowAccent()): yellow for new this week,
+         purple for events, and a screening kind's own color (Preview blue,
+         Midnight Movie red, Women's Night pink), each with a faint tint
+         of the same color. The edge sits in the panel's own 14px side
+         padding (::before, not a border or row padding): inside the row it
+         pushed that row's poster and chips 7px right of every other row. */
+      #uci-browse .film-row.film-row--accent{position:relative;--accent:255,241,1;
+        background:rgba(var(--accent),.035)}
+      #uci-browse .film-row.film-row--event{--accent:180,120,230}
+      #uci-browse .film-row.film-row--preview{--accent:79,157,222}
+      #uci-browse .film-row.film-row--midnight{--accent:230,70,70}
+      #uci-browse .film-row.film-row--womens{--accent:235,110,170}
+      #uci-browse .film-row.film-row--accent::before{content:'';position:absolute;left:-8px;
+        top:6px;bottom:6px;width:3px;border-radius:2px;background:rgb(var(--accent))}
+      #uci-browse .film-row.film-row--accent:hover{background:rgba(var(--accent),.07)}
+      #uci-browse .ub-badges{display:flex;flex-wrap:wrap;gap:4px;line-height:1;margin-bottom:3px}
+      #uci-browse .ub-badge{display:inline-block;padding:1px 5px;border-radius:3px;border:1px solid;
+        font-size:9.5px;font-weight:700;line-height:1.3;letter-spacing:.03em;text-transform:uppercase}
+      #uci-browse .ub-badge--new{background:#fff101;color:#000;border-color:#fff101}
+      #uci-browse .ub-badge--start{color:#fff101;border-color:rgba(255,241,1,.6)}
+      /* Preview and Sneak: blue, like the OV chips. Event: purple.
+         Midnight Movie: red. Women's Night: pink, as on UCI's own badge. */
+      #uci-browse .ub-badge--preview{background:rgba(79,157,222,.18);color:#8fc4f0;border-color:rgba(79,157,222,.6)}
+      #uci-browse .ub-badge--event{background:rgba(180,120,230,.16);color:#d3b2f2;border-color:rgba(180,120,230,.55)}
+      #uci-browse .ub-badge--midnight{background:rgba(230,70,70,.16);color:#f2a3a3;border-color:rgba(230,70,70,.6)}
+      #uci-browse .ub-badge--womens{background:rgba(235,110,170,.16);color:#f5b3d3;border-color:rgba(235,110,170,.6)}
       #uci-browse .film-meta{font-size:11px;color:#8b97a8;white-space:nowrap;
         overflow:hidden;text-overflow:ellipsis}
       #uci-browse .film-chips{display:flex;flex-wrap:wrap;gap:5px;flex:1;
@@ -2459,6 +3280,13 @@
       #uci-browse .chip.premium{border-color:rgba(255,241,1,.5)}
       #uci-browse .chip.lang-orig{background:rgba(79,157,222,.16);border-color:rgba(79,157,222,.4)}
       #uci-browse .chip.lang-orig .chip-sub{color:#8fc4f0}
+      /* Screening kinds (SCREENING_KINDS): the chip's border in the kind's
+         color, after .premium/.lang-orig so it wins over theirs. */
+      #uci-browse .chip.chip--preview{border-color:rgba(79,157,222,.9)}
+      #uci-browse .chip.chip--midnight{border-color:rgba(230,70,70,.85)}
+      #uci-browse .chip.chip--midnight .chip-sub{color:#f2a3a3}
+      #uci-browse .chip.chip--womens{border-color:rgba(235,110,170,.85)}
+      #uci-browse .chip.chip--womens .chip-sub{color:#f5b3d3}
       /* Weekday/date prefix de-emphasized so the times are what the eye
          scans along a row; translucent white so it reads on both the grey
          and the blue (original-language) chip backgrounds. */
@@ -2552,18 +3380,18 @@
         margin-right:auto !important}
 
       /* Pure marketing banner — nothing functional lives here. */
-      .pimcore_area_keyvisual-kinowelt{display:none !important}
+      html:not(.ub-native) .pimcore_area_keyvisual-kinowelt{display:none !important}
 
       /* The native filter panel (Datum/Version/Uhrzeit/Events, the Filter
          toggle, the reset link) is fully superseded by our own date tabs
          and Nur-OV control — removed outright rather than kept as
          a fallback. Real data-attribute, unique to this one wrapper. */
-      [data-schedule-filters-wrapper]{display:none !important}
+      html:not(.ub-native) [data-schedule-filters-wrapper]{display:none !important}
 
       /* Real navigation (Aktuelles Programm / Demnächst → /coming-soon),
          but 150px for two links is a lot of scroll cost. Kept reachable via
          a small link in our own footer instead — see ub-foot below. */
-      .switch-tabs{display:none !important}`;
+      html:not(.ub-native) .switch-tabs{display:none !important}`;
 
     // These two blocks have no unique classnames — only reusable Bootstrap
     // utility combos that likely repeat elsewhere on the page — so they're
@@ -2575,12 +3403,14 @@
     // steps past that match when the element itself collapses to 0 height
     // once emptied, but its outer wrapper still reserves space via its own
     // padding, independent of content.
+    // What tidyNativeChrome() hid, so the original view can show it again.
+    const nativeHiddenEls = [];
     function hideByText(text, closestSelector, extraClimb = 0) {
       const el = [...document.querySelectorAll('*')].find((e) =>
         e.children.length === 0 && e.textContent.trim() === text);
       let target = el ? el.closest(closestSelector) : null;
       for (let i = 0; i < extraClimb && target; i++) target = target.parentElement;
-      if (target) { target.style.display = 'none'; return true; }
+      if (target) { target.style.display = 'none'; nativeHiddenEls.push(target); return true; }
       return false;
     }
 
@@ -2593,7 +3423,11 @@
       const sw = hideByText('Vorstellungsansicht', 'div[class]', 1);
       // Search box: filters the native grid, same as above.
       const q = document.querySelector('input[placeholder*="Filmtitel" i]');
-      if (q) { q.closest('div[class]').parentElement.style.display = 'none'; }
+      if (q) {
+        const box = q.closest('div[class]').parentElement;
+        box.style.display = 'none';
+        nativeHiddenEls.push(box);
+      }
       console.log(TAG, 'view-switcher hidden:', sw, '| search box hidden:', !!q);
     }
 
@@ -2603,6 +3437,7 @@
     // re-asserts the fix directly via inline styles rather than silently
     // going stale after the old one-shot mount window closed.
     function enforceHidden() {
+      if (nativeShown()) return;
       const grid = document.querySelector('.movies-grid');
       if (grid && grid.style.display !== 'none') grid.style.display = 'none';
 
@@ -2627,6 +3462,164 @@
       }
     }
 
+    // -------------------------------------------------------------- WebMCP
+    // Programme-page tools (see webmcp at the top): the same data and
+    // filters as the list, read-only, plus opening a showing's booking page,
+    // where the booking tools take over.
+    const isoDate = (str) => `${str.slice(0, 4)}-${str.slice(4, 6)}-${str.slice(6, 8)}`;
+    const compactDate = (iso, field) => {
+      if (iso == null || iso === '') return null;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) throw new Error(`${field} must be YYYY-MM-DD`);
+      return iso.replace(/-/g, '');
+    };
+    const hhmm = (t, field) => {
+      if (t == null || t === '') return null;
+      if (!/^\d{1,2}:\d{2}$/.test(t)) throw new Error(`${field} must be HH:MM`);
+      return t.padStart(5, '0');
+    };
+    const kindLabel = (kind) => SCREENING_KINDS.find((k) => k.kind === kind).badge;
+    function showingForAgent(s) {
+      const d = new Date(+s.date.slice(0, 4), +s.date.slice(4, 6) - 1, +s.date.slice(6, 8));
+      return {
+        date: isoDate(s.date), weekday: WEEKDAY.format(d).replace('.', ''), time: s.time,
+        auditorium: s.auditorium || null, language: s.lang || 'Deutsch', formats: s.formats,
+        special: s.special || null, kinds: s.kinds.map(kindLabel), perfId: s.perfId, siteId: s.siteId,
+      };
+    }
+    function filmForAgent(f) {
+      const badges = [f.fresh && f.fresh.label, ...f.allKinds.map((k) => k.badge),
+        f.isEvent && 'Event', f.isSneak && 'Sneak'].filter(Boolean);
+      return { title: f.title, runtime: f.runtime, fsk: f.fsk,
+        genre: f.genre && f.genre.replace(/\s+/g, ' ').replace(/\s*,\s*/g, ', '), badges,
+        filmPage: f.href ? new URL(f.href, location.href).href : null };
+    }
+    const waitFor = async (cond, ms) => {
+      for (const t0 = Date.now(); !cond() && Date.now() - t0 < ms;) await new Promise((r) => setTimeout(r, 200));
+    };
+
+    function registerBrowseTools() {
+      webmcp.register([
+        {
+          name: 'search_showtimes',
+          title: 'Vorstellungen suchen',
+          description: 'Search this UCI cinema\'s programme (the cinema whose programme page is open). '
+            + 'Returns films with their matching showings: date, weekday, time, auditorium, language '
+            + '("Deutsch" = German dub; OV, OmU, OmeU = original language), formats (IMAX, 3D, …), '
+            + 'special kinds (Preview, Women\'s Night, Midnight Movie), and the perfId/siteId that '
+            + 'open_booking takes. All filters are optional and combine.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              query: { type: 'string', description: 'Part of the film title, accent- and case-insensitive' },
+              date: { type: 'string', description: 'One day, YYYY-MM-DD' },
+              dateFrom: { type: 'string', description: 'First day, YYYY-MM-DD' },
+              dateTo: { type: 'string', description: 'Last day, YYYY-MM-DD' },
+              after: { type: 'string', description: 'Earliest start time, HH:MM' },
+              before: { type: 'string', description: 'Latest start time, HH:MM' },
+              originalLanguageOnly: { type: 'boolean', description: 'Only OV, OmU and OmeU showings' },
+              format: { type: 'string', description: 'Only showings with this format, e.g. IMAX, 3D, Dolby Atmos' },
+              newOnly: { type: 'boolean', description: 'Only films new this week or starting this week' },
+              limit: { type: 'integer', minimum: 1, maximum: 500, description: 'Max showings returned (default 150)' },
+            },
+          },
+          annotations: { readOnlyHint: true },
+          run: (inp) => {
+            const day = compactDate(inp.date, 'date');
+            const from = day || compactDate(inp.dateFrom, 'dateFrom');
+            const to = day || compactDate(inp.dateTo, 'dateTo');
+            const after = hhmm(inp.after, 'after'), before = hhmm(inp.before, 'before');
+            const fmt = inp.format ? normalizeSearch(inp.format) : null;
+            const q = inp.query ? normalizeSearch(inp.query) : null;
+            let budget = Math.min(Math.max(+inp.limit || 150, 1), 500), truncated = false;
+            const out = [];
+            for (const f of programme().films) {
+              if (q && !normalizeSearch(f.title).includes(q)) continue;
+              if (inp.newOnly && !f.fresh) continue;
+              const shows = f.showtimes
+                .filter((s) => (!from || s.date >= from) && (!to || s.date <= to))
+                .filter((s) => (!after || s.time.padStart(5, '0') >= after) && (!before || s.time.padStart(5, '0') <= before))
+                .filter((s) => !inp.originalLanguageOnly || isOriginalLanguage(s.lang))
+                .filter((s) => !fmt || s.formats.some((x) => normalizeSearch(x).includes(fmt)))
+                .sort((a, b) => (a.date + a.time.padStart(5, '0')).localeCompare(b.date + b.time.padStart(5, '0')));
+              if (!shows.length) continue;
+              if (budget <= 0) { truncated = true; break; }
+              if (shows.length > budget) truncated = true;
+              out.push(Object.assign(filmForAgent(f), { showtimes: shows.slice(0, budget).map(showingForAgent) }));
+              budget -= shows.length;
+            }
+            return { today: isoDate(ymd(new Date())), films: out, truncated };
+          },
+        },
+        {
+          name: 'list_new_this_week',
+          title: 'Neu diese Woche',
+          description: 'Films new at this UCI cinema this week, or starting before the next 8 days are over '
+            + '(label "Neu" = in its first week, "Start DD.MM." = opens that day), with their first showing.',
+          inputSchema: { type: 'object', properties: {} },
+          annotations: { readOnlyHint: true },
+          run: () => {
+            const { films, days } = programme();
+            const last = days[days.length - 1].str;
+            return {
+              films: films.filter((f) => f.fresh).map((f) => {
+                const week = f.showtimes.filter((s) => s.date <= last)
+                  .sort((a, b) => (a.date + a.time.padStart(5, '0')).localeCompare(b.date + b.time.padStart(5, '0')));
+                return Object.assign(filmForAgent(f), { label: f.fresh.label, detail: f.fresh.tip,
+                  showingsNext8Days: week.length, firstShowing: week[0] ? showingForAgent(week[0]) : null });
+              }),
+            };
+          },
+        },
+        {
+          name: 'list_coming_soon',
+          title: 'Demnächst',
+          description: 'Films announced as coming soon at UCI, with their German start date (YYYY-MM-DD; '
+            + 'null = already running) and whether '
+            + 'tickets can already be booked. Showtimes for these appear in search_showtimes once published.',
+          inputSchema: {
+            type: 'object',
+            properties: { query: { type: 'string', description: 'Part of the film title' } },
+          },
+          annotations: { readOnlyHint: true },
+          run: async (inp) => {
+            if (demnaechstState === 'idle' || demnaechstState === 'error') loadDemnaechst();
+            await waitFor(() => demnaechstState !== 'loading', 20000);
+            if (demnaechstState !== 'loaded') throw new Error('Could not load /coming-soon (UCI server error).');
+            const q = inp.query ? normalizeSearch(inp.query) : null;
+            return {
+              films: demnaechstFilms.filter((f) => !q || normalizeSearch(f.title).includes(q)).map((f) => ({
+                title: f.title, start: f.dateLabel ? isoDate(f.dateSort) : null, bookable: f.bookable, filmPage: f.href,
+              })),
+            };
+          },
+        },
+        {
+          name: 'open_booking',
+          title: 'Buchung öffnen',
+          description: 'Open the booking page for one showing (perfId and siteId from search_showtimes). '
+            + 'The tab navigates away; on the booking page the user picks seats, and the booking tools '
+            + '(get_booking_state, list_unlimited_cards, redeem_unlimited_cards) become available.',
+          inputSchema: {
+            type: 'object',
+            properties: { perfId: { type: 'string' }, siteId: { type: 'string' } },
+            required: ['perfId', 'siteId'],
+          },
+          annotations: { readOnlyHint: false },
+          run: ({ perfId, siteId }) => {
+            for (const f of programme().films) {
+              const s = f.showtimes.find((x) => x.perfId === String(perfId) && x.siteId === String(siteId));
+              if (!s) continue;
+              const url = bookingUrl(s);
+              setTimeout(() => location.assign(url), 300);
+              return { opening: url, film: f.title, showing: showingForAgent(s),
+                next: 'The user picks seats on the seat map and presses Weiter to reach the payment step.' };
+            }
+            throw new Error('No showing with that perfId/siteId on this programme page.');
+          },
+        },
+      ]);
+    }
+
     function mount() {
       const grid = document.querySelector('.movies-grid');
       if (!grid) return false;
@@ -2640,6 +3633,11 @@
       grid.insertAdjacentElement('afterend', panel);
       enforceHidden();
       render();
+      // /coming-soon carries the official start dates the Preview badges
+      // need, so it's loaded right away instead of on the first Demnächst
+      // click. Renders again when it arrives.
+      if (demnaechstState === 'idle') loadDemnaechst();
+      registerBrowseTools();
       clearTimeout(spinnerTimeout);
       spinner.remove();
       console.log(TAG, 'mounted, replacing .movies-grid');

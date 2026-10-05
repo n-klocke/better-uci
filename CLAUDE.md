@@ -140,9 +140,15 @@ into the DOM, e.g. with a throwaway page-world overlay script.
   open items marked explicitly. Update it when you learn something new
   about the API — it's meant to stay current, not be a one-time snapshot.
 - `fixtures/` — real captured API responses for offline validation.
+- `docs/screenshots/` — README images. Hide the account name in the header
+  and replace saved card names before capturing; the repo is public.
 - `archive/seat-map.js` — the paused custom seat map, moved out of the
   userscript in v3.0.0. Not loaded by Tampermonkey; it's still where
   `parseSeatStr`, `rowKey`, `groupSeatsByRow`, and `seatMapHTML` live.
+- `test/webmcp-stub.user.js` — testing-only helper script: a fake
+  `document.modelContext` so the WebMCP tools can be exercised in a Chrome
+  without WebMCP. Install it next to the local build, then call tools from
+  the page console with `await __webmcp.call('search_showtimes', {...})`.
 - `test/validate-fixtures.js` — run with `node test/validate-fixtures.js`
   (or `bun`). Imports and exercises the real parsing/grouping code from
   `archive/seat-map.js` instead of a hand-maintained copy of it. That file
