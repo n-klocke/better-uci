@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         better-uci
 // @namespace    https://github.com/n-klocke/better-uci
-// @version      3.4.0
+// @version      3.4.1
 // @description  Batch-redeem UCI Unlimited cards on the booking page, and a denser, filterable programme browser on the kinoprogramm page.
 // @author       n-klocke
 // @license      MIT
@@ -672,6 +672,30 @@
   // objects between worlds, only primitives. Only primitive fields of each
   // price row are copied. That covers every field this file reads, and
   // skips anything the page attached that wouldn't survive JSON.
+  // The seat map's own seat models (book.seatingApp, Backbone). They stay
+  // loaded on the payment step too, with the picked seats still selected
+  // (seen live). These three run in whichever world can see book: called
+  // directly with getBook()/pageWin(), or on the page side of pageBridge,
+  // which gets their source injected alongside its own.
+  function seatModelsOf(b) {
+    const bd = b && b.seatingApp && b.seatingApp.bookingData;
+    return (bd && bd.attributes && bd.attributes.seats && bd.attributes.seats.models) || [];
+  }
+  function selectedSeatsOf(b) {
+    return seatModelsOf(b).filter((m) => m.isSelected())
+      .map((m) => ({ row: m.attributes.row, seat: m.attributes.seatNumber }));
+  }
+  // Every seat with position and state, for the mini map in the WebMCP
+  // confirmation. Units are the seat map's own (seats ~30 wide, rows ~76
+  // apart, lower y = closer to the screen).
+  function seatMapOf(b) {
+    return seatModelsOf(b).map((m) => {
+      const a = m.attributes, mine = m.isSelected();
+      return { x: +a.x, y: +a.y, w: +a.width, row: String(a.row).replace(/^R/, ''), seat: String(a.seatNumber),
+        mine, taken: !mine && a.statusStr !== 'FREE' };
+    });
+  }
+
   function pageBridgeMain(ch) {
     const reply = (id, msg) => document.dispatchEvent(new CustomEvent(ch + ':res',
       { detail: JSON.stringify(Object.assign({ id }, msg)) }));
@@ -692,6 +716,7 @@
           reply(m.id, { ok: true, result: b ? {
             bookingProcessId: b.bookingProcessId,
             unlimitedCustomerNumber: b.unlimitedCustomerNumber,
+            selectedSeats: selectedSeatsOf(b),
             priceRows: (b.priceRows || []).map(plain),
           } : null });
         } else if (m.op === 'post') {
@@ -699,6 +724,8 @@
             .done((resp) => reply(m.id, { ok: true, result: resp }))
             .fail((xhr) => reply(m.id, { ok: false, status: xhr.status,
               body: xhr.responseJSON || null, text: xhr.responseText || '' }));
+        } else if (m.op === 'seatMap') {
+          reply(m.id, { ok: true, result: seatMapOf(b) });
         } else if (m.op === 'apply') {
           Promise.resolve(b.handleBookingServerSuccess(m.resp)).then(
             () => reply(m.id, { ok: true }),
@@ -726,7 +753,7 @@
         if (done) { pending.delete(m.id); done(m); }
       });
       const s = document.createElement('script');
-      s.textContent = `(${pageBridgeMain})(${JSON.stringify(ch)});`;
+      s.textContent = `${seatModelsOf}\n${selectedSeatsOf}\n${seatMapOf}\n(${pageBridgeMain})(${JSON.stringify(ch)});`;
       (document.head || document.documentElement).appendChild(s);
       s.remove();
     }
@@ -1378,16 +1405,35 @@
       cartObserver = new MutationObserver(updateStepBar);
       cartObserver.observe(cart, { childList: true, subtree: true, characterData: true });
     }
-    const count = cart?.querySelector('.customer-cart-ticket-counter')?.textContent.trim() || '';
+    let count = cart?.querySelector('.customer-cart-ticket-counter')?.textContent.trim() || '';
     // "18.40 €", or "0.00 € (9.90 €)" once cards cover it (confirm step).
-    const total = (cart?.querySelector('.customer-cart-total-price')?.textContent.trim() || '')
+    let total = (cart?.querySelector('.customer-cart-total-price')?.textContent.trim() || '')
       .replace(/(\d)\.(\d\d)/g, '$1,$2').replace(/\(\s*(?=\d)/, '(statt ');
-    // "PK 1 LOGE | Reihe 2 | Sitz 11" per seat → "Reihe 2: Sitz 11, 12".
+    // One cart line per row, "PK 2 | Reihe J | Sitz 13, 14" (seen live),
+    // merged per row label → "Reihe J: Sitz 13, 14".
     const rows = new Map();
+    const addSeats = (row, nums) => rows.set(row, [...(rows.get(row) || []), ...nums]);
     cart?.querySelectorAll('.cart-content-sub-header').forEach((h) => {
-      const sm = h.textContent.match(/Reihe\s*(\S+)\s*\|\s*Sitz\s*(\S+)/i);
-      if (sm) rows.set(sm[1], [...(rows.get(sm[1]) || []), sm[2]]);
+      const sm = h.textContent.match(/Reihe\s*(\S+)\s*\|\s*Sitz\s*([^|]+)/i);
+      if (sm) addSeats(sm[1], sm[2].split(',').map((n) => n.trim()).filter(Boolean));
     });
+    // Seat step: UCI's cart stays empty until Weiter ("Es befindet sich noch
+    // nichts in Ihrem Warenkorb" with two seats picked, seen live), so the
+    // count and total come from the ticket picker and the seats from the
+    // seat map's own models.
+    if (action.step === 'seats') {
+      rows.clear();
+      const b = getBook();
+      const picked = (b && (b.selectedSeats || selectedSeatsOf(b))) || [];
+      picked.slice().sort((x, y) => +x.seat - +y.seat).forEach((p) => addSeats(String(p.row).replace(/^R/, ''), [p.seat]));
+      const container = findActiveTicketContainer();
+      const tickets = container ? ticketRows(container) : [];
+      const n = tickets.reduce((sum, r) => sum + (+r.count || 0), 0);
+      const amount = tickets.reduce((sum, r) =>
+        sum + (+r.count || 0) * (parseFloat(r.price.replace(/[^\d,]/g, '').replace(',', '.')) || 0), 0);
+      count = n ? `${n} Ticket${n === 1 ? '' : 's'}` : '';
+      total = n && amount ? eur(amount) : '';
+    }
     const seats = [...rows].map(([row, nums]) => `Reihe ${row}: Sitz ${nums.join(', ')}`).join(' · ');
     const hasTickets = !!count && !/^0\b/.test(count);
     const sum = hasTickets ? [count, total].filter(Boolean).join(' · ') : 'Noch keine Tickets';
@@ -1933,9 +1979,52 @@
     });
   }
 
+  async function loadSeatMap() {
+    const w = pageWin();
+    if (w) return seatMapOf(w.book);
+    if (!useBridge) return [];
+    const m = await pageBridge.call({ op: 'seatMap' });
+    return m.ok ? m.result : [];
+  }
+
+  // Mini seat map: screen at the top, your seats yellow, the ones already
+  // covered by a card or Movie Points green, taken seats dark.
+  function seatMapSVG(seats, covered) {
+    const NS = 'http://www.w3.org/2000/svg';
+    const minX = Math.min(...seats.map((t) => t.x)), maxX = Math.max(...seats.map((t) => t.x + t.w));
+    const minY = Math.min(...seats.map((t) => t.y)), maxY = Math.max(...seats.map((t) => t.y + t.w));
+    const pad = 10, top = 60, W = maxX - minX + pad * 2;
+    const svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', `0 0 ${W} ${maxY - minY + pad * 2 + top}`);
+    svg.setAttribute('class', 'map');
+    svg.setAttribute('role', 'img');
+    const screen = document.createElementNS(NS, 'path');
+    screen.setAttribute('d', `M ${W * 0.1} 30 Q ${W / 2} 6 ${W * 0.9} 30`);
+    screen.setAttribute('class', 'screen');
+    svg.append(screen);
+    seats.forEach((t) => {
+      const r = document.createElementNS(NS, 'rect');
+      r.setAttribute('x', t.x - minX + pad); r.setAttribute('y', t.y - minY + pad + top);
+      r.setAttribute('width', t.w * 0.86); r.setAttribute('height', t.w * 0.86); r.setAttribute('rx', t.w * 0.18);
+      r.setAttribute('class', t.mine ? (covered.has(t.row + ' ' + t.seat) ? 'covered' : 'mine') : t.taken ? 'taken' : 'free');
+      svg.append(r);
+    });
+    return svg;
+  }
+
+  // "Reihe J: Platz 13, 14 · Reihe K: Platz 2" from the basket rows.
+  function seatsSummary(rows) {
+    const byRow = new Map();
+    rows.filter((r) => r.seatRow).forEach((r) => byRow.set(r.seatRow, [...(byRow.get(r.seatRow) || []), r.seatRowPos]));
+    return [...byRow].map(([row, nums]) => `Reihe ${row}: Platz ${nums.sort((a, b) => a - b).join(', ')}`).join(' · ');
+  }
+
   // Agent-requested redemption always waits for a click here. Built with
   // textContent only: card names come from saved/imported JSON.
-  function confirmAgentRedeem(people) {
+  async function confirmAgentRedeem(people) {
+    const rows = localRows();
+    const covered = new Set(rows.filter((r) => !isOpen(r)).map((r) => r.seatRow + ' ' + r.seatRowPos));
+    const map = await loadSeatMap().catch(() => []);
     return new Promise((resolve) => {
       document.getElementById('uci-mcp-confirm')?.remove();
       const box = document.createElement('div');
@@ -1946,7 +2035,16 @@
             display:flex;align-items:center;justify-content:center;padding:16px;
             font:14px/1.45 system-ui,-apple-system,sans-serif}
           #uci-mcp-confirm .dlg{background:#0b1a3a;color:#e8edf3;border:1px solid rgba(255,255,255,.18);
-            border-radius:8px;padding:16px 18px;max-width:360px;width:100%;box-shadow:0 10px 40px rgba(0,0,0,.5)}
+            border-radius:8px;padding:16px 18px;max-width:400px;width:100%;box-shadow:0 10px 40px rgba(0,0,0,.5);
+            max-height:calc(100vh - 32px);overflow:auto;box-sizing:border-box}
+          #uci-mcp-confirm .map{display:block;width:100%;height:auto;margin:2px 0 6px}
+          #uci-mcp-confirm .map .screen{fill:none;stroke:rgba(255,255,255,.55);stroke-width:4}
+          #uci-mcp-confirm .map .free{fill:rgba(255,255,255,.32)}
+          #uci-mcp-confirm .map .taken{fill:rgba(255,255,255,.07)}
+          #uci-mcp-confirm .map .mine{fill:#fff101}
+          #uci-mcp-confirm .map .covered{fill:#7fd6a0}
+          #uci-mcp-confirm .seats{font-size:13px;margin-bottom:10px}
+          #uci-mcp-confirm .seats b{color:#fff101;font-weight:700}
           #uci-mcp-confirm .t{font-weight:700;margin-bottom:4px}
           #uci-mcp-confirm .perf{font-size:12.5px;color:#98a4b3;margin-bottom:10px}
           #uci-mcp-confirm ul{margin:0 0 14px;padding:0;list-style:none}
@@ -1960,7 +2058,7 @@
           #uci-mcp-confirm button.yes{background:#fff101;color:#000}
         </style>
         <div class="dlg" role="dialog" aria-modal="true">
-          <div class="t"></div><div class="perf"></div><ul></ul>
+          <div class="t"></div><div class="perf"></div><div class="seats"></div><ul></ul>
           <div class="btns"><button type="button" data-a="0">Abbrechen</button>
             <button type="button" class="yes" data-a="1">Einlösen</button></div>
         </div>`;
@@ -1969,6 +2067,14 @@
       const info = readPerfInfo();
       box.querySelector('.perf').textContent = info
         ? [info.title + (info.version ? ` (${info.version})` : ''), info.when].filter(Boolean).join(' · ') : '';
+      const seatsEl = box.querySelector('.seats');
+      const summary = seatsSummary(rows);
+      if (summary) {
+        const b = document.createElement('b'); b.textContent = summary;
+        seatsEl.append('Plätze: ', b);
+        if (covered.size) seatsEl.append(` (${covered.size} schon eingelöst, grün)`);
+      }
+      if (map.length) seatsEl.before(seatMapSVG(map, covered));
       const ul = box.querySelector('ul');
       people.forEach((p) => {
         const li = document.createElement('li');

@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.4.1
+
+- The bottom bar on the seat step counted "Noch keine Tickets" with seats
+  picked: it read UCI's cart, which stays empty until Weiter. It now reads
+  the ticket picker and the seat map ("2 Tickets · 29,80 €", "Reihe J:
+  Sitz 13, 14").
+- Payment step bar: "Reihe J: Sitz 13," lost every seat after the first in
+  a row. UCI lists a row's seats in one line ("Sitz 13, 14").
+- The WebMCP confirmation dialog shows the booked seats: a small seat map
+  with yours highlighted, and "Plätze: Reihe J: Platz 13, 14".
+
 ## 3.4.0
 
 - **WebMCP tools** for browser AI agents, in browsers that support WebMCP

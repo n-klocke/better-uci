@@ -74,7 +74,7 @@ Replaces the poster grid with a list view:
   bookable.
 - A **search box** that filters whichever tab you're on, umlaut-insensitive.
 ## AI agents (WebMCP)
-<img width="430" alt="better-uci's confirmation dialog for an agent's request to redeem two Unlimited cards" src="docs/screenshots/webmcp-confirm.png" />
+<img width="360" alt="better-uci's confirmation dialog for an agent's request to redeem two Unlimited cards, with a seat map of the booked seats" src="docs/screenshots/webmcp-confirm.png" />
 
 [WebMCP](https://webmachinelearning.github.io/webmcp/) is a proposed browser
 API that lets a web page offer tools to an AI agent running in the browser.
@@ -101,8 +101,9 @@ through the site.
 | `redeem_unlimited_cards` | Redeems the named cards, yours and/or friends', on the payment step, at most one per open seat. |
 
 What the agent can't do:
-- **Redeem without you.** Every redemption opens the dialog above, and
-  nothing happens until you click **Einlösen**. **Abbrechen** tells the agent
+- **Redeem without you.** Every redemption opens the dialog above, with
+  a seat map of your booked seats, and nothing happens until you click
+  **Einlösen**. **Abbrechen** tells the agent
   you declined.
 - **See card numbers.** Only masked numbers (`1234…5678`) ever leave the
   script. Cards are chosen by name.
