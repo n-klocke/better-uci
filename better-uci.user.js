@@ -2043,7 +2043,15 @@
       demnaechstState = 'loading';
       render();
       try {
-        const res = await fetch('/coming-soon');
+        // UCI's server answers /coming-soon with an intermittent 502/503
+        // "Störung" page (seen 2026-10-05: one failure, then 200 on the very
+        // next request), so a failed load is retried a couple of times.
+        let res;
+        for (let attempt = 0; ; attempt++) {
+          res = await fetch('/coming-soon');
+          if (res.ok || attempt >= 2) break;
+          await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+        }
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
         demnaechstFilms = collectComingSoon(doc);

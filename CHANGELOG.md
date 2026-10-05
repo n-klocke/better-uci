@@ -11,6 +11,8 @@ Programme page:
   the old form was recognised, so every showtime and with it every film
   was dropped. Both forms are read now (confirmed on the live East Side
   Gallery page: 0 films before, 63 films with 275 showtimes after).
+- Demnächst retries up to twice when UCI's server answers with its
+  intermittent 502/503 "Störung" page, instead of giving up at once.
 
 ## 3.1.7
 
