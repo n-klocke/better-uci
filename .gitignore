@@ -13,3 +13,6 @@ Thumbs.db
 *.swp
 
 node_modules/
+
+# test/best-seats.js report
+test/out/

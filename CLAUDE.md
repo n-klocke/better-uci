@@ -153,6 +153,14 @@ into the DOM, e.g. with a throwaway page-world overlay script.
   `document.modelContext` so the WebMCP tools can be exercised in a Chrome
   without WebMCP. Install it next to the local build, then call tools from
   the page console with `await __webmcp.call('search_showtimes', {...})`.
+- `test/best-seats.js` — run with `bun test/best-seats.js [filter]`. Runs
+  the real `bestSeatGroup` (cut out of the userscript by brace matching,
+  with `SEAT_PREFS_DEFAULT` read from it too) on the seat plans in
+  `fixtures/seatplans/` and checks the picks against
+  `test/best-seats.cases.js`. Cases without `expect` are only shown. Prints
+  a text map per hall and writes `test/out/best-seats.html` (gitignored).
+  The plans are `seatPlanOf`'s shape, captured 2026-10-07 with real
+  occupancy, plus the Erwachsener price per category.
 - `test/validate-fixtures.js` — run with `node test/validate-fixtures.js`
   (or `bun`). Imports and exercises the real parsing/grouping code from
   `archive/seat-map.js` instead of a hand-maintained copy of it. That file
