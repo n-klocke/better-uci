@@ -161,6 +161,15 @@ directly.
 Used by the voucher-redemption module. Not documented in detail here —
 see `better-uci.user.js` for its usage.
 
+- **`seatActionIdx` is `priceRows[].bookingServerIndex`, not the row's
+  array position** — confirmed 2026-10-07 from UCI's own `dist/main.js`
+  (`displayTicketSelectionForDiscount`, `applyUnlimitedCardToTicket`, the
+  ticket-voucher flow). Sending the array position failed for friends'
+  Unlimited cards with `B-RT34 C-160` ("Es können derzeit keine Buchungen
+  mit hinterlegter Kundenkarte durchgeführt werden."), while UCI's own
+  form worked. **OPEN:** an actual `priceRows` where the two differ hasn't
+  been captured yet.
+
 ## Seat map internals (`book.seatingApp`) — confirmed 2026-10-06
 
 Groundwork for an automatic "best seats" picker (not built yet). All of this

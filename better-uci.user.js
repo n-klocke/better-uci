@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         better-uci
 // @namespace    https://github.com/n-klocke/better-uci
-// @version      3.9.0
+// @version      3.9.1
 // @description  Batch-redeem UCI Unlimited cards on the booking page, and a denser, filterable programme browser on the kinoprogramm page.
 // @author       n-klocke
 // @license      MIT
@@ -921,14 +921,18 @@
             note: open ? `Karte für keinen der ${open} offenen Plätze erlaubt` : 'alle Plätze belegt' };
         }
 
+        // seatActionIdx is the row's bookingServerIndex, as in UCI's own
+        // form (displayTicketSelectionForDiscount), not its position in
+        // priceRows; the two can differ, and the server then applies the
+        // card to another ticket or refuses it (B-RT34 C-160).
+        const sidx = rows[idx].bookingServerIndex ?? idx;
         rep.phase('wird angewendet → ' + seatLabel(rows[idx]));
         const resp = await post(
-          { bookingProcessId: bpid(), seatAction: 'unlimited', seatActionIdx: idx, seatActionValue: code },
-          `apply ${mask(code)} idx=${idx}`, rep, prog);
+          { bookingProcessId: bpid(), seatAction: 'unlimited', seatActionIdx: sidx, seatActionValue: code },
+          `apply ${mask(code)} idx=${sidx}`, rep, prog);
 
-        const row = rowsOf(resp)[idx];
-        if (!row || !row.unlimitedTicket || (row.unlimitedTicketCardNo || '').trim() !== code.trim())
-          throw new Error('Server hat die Karte nicht angewendet');
+        const row = appliedRow(rowsOf(resp), code);
+        if (!row) throw new Error('Server hat die Karte nicht angewendet');
 
         rep.phase('Ansicht wird aktualisiert');
         await applyToPage(resp);
