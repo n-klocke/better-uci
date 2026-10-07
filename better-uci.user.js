@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         better-uci
 // @namespace    https://github.com/n-klocke/better-uci
-// @version      3.9.3
+// @version      3.9.4
 // @description  Batch-redeem UCI Unlimited cards on the booking page, and a denser, filterable programme browser on the kinoprogramm page.
 // @author       n-klocke
 // @license      MIT
@@ -1717,7 +1717,10 @@
   // a seat or two in from the aisle is nearly as good as at it), 0.3 per
   // seat off-centre, 0.25 per row off the target plus the square
   // of every row beyond the first, and 0.25 per € above the cheapest
-  // category. The steep row part keeps an aisle elsewhere from pulling the
+  // category. Up to 0.25 more for the high-number end of a row, a fixed
+  // nudge to the entrance side (low numbers) that settles mirrored picks,
+  // as in curved IMAX rows, and outweighs about 0.7 seat off-centre. The
+  // steep row part keeps an aisle elsewhere from pulling the
   // pick far away: East Side Gallery Kino 07 has a central aisle (at the
   // wheelchair spaces) in the front row only. Importance scales each part
   // linearly; the defaults are SEAT_PREFS_DEFAULT.
@@ -1758,7 +1761,19 @@
       });
       lines.push(line);
     });
-    lines.forEach((line) => { const y = median(line.map((t) => t.y + t.h / 2)); line.forEach((t) => rowY.set(t.id, y)); });
+    // side: where a seat sits along its line by number, 0 at the lowest
+    // number, 1 at the highest. The low numbers are the entrance side.
+    const side = new Map();
+    lines.forEach((line) => {
+      const y = median(line.map((t) => t.y + t.h / 2));
+      const nums = line.map((t) => parseInt(t.seat, 10)).filter(Number.isFinite);
+      const lo = Math.min(...nums), hi = Math.max(...nums);
+      line.forEach((t) => {
+        const v = parseInt(t.seat, 10);
+        rowY.set(t.id, y);
+        side.set(t.id, Number.isFinite(v) && hi > lo ? (v - lo) / (hi - lo) : 0.5);
+      });
+    });
     const lineYs = [...new Set(rowY.values())].sort((a, b) => a - b);
     const rowPitch = median(lineYs.slice(1).map((y, i) => y - lineYs[i]).filter((d) => d > seatW / 2)) || seatW;
     // depth: 0 = at the screen, 100 = at the back wall.
@@ -1799,7 +1814,8 @@
         const price = priceOf.get(g[0].section);
         const cost = k('aisle') * aisleDist ** 2 / (aisleDist + 3) + k('center') * 0.3 * Math.abs(gx - cx) / seatW
           + k('row') * (0.25 * rowDist + Math.max(0, rowDist - 1) ** 2)
-          + k('price') * 0.25 * (price != null ? price - minPrice : 0);
+          + k('price') * 0.25 * (price != null ? price - minPrice : 0)
+          + 0.25 * g.reduce((s, t) => s + side.get(t.id), 0) / n;
         const order = L === 0 || R !== 0 ? g : g.slice().reverse();
         const cand = { seats: order, cost, row: g[0].row, section: g[0].section };
         if (L === 1 || R === 1) { if (!bestGap || cost < bestGap.cost) bestGap = cand; }
