@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         better-uci
 // @namespace    https://github.com/n-klocke/better-uci
-// @version      3.7.4
+// @version      3.8.0
 // @description  Batch-redeem UCI Unlimited cards on the booking page, and a denser, filterable programme browser on the kinoprogramm page.
 // @author       n-klocke
 // @license      MIT
@@ -1488,9 +1488,7 @@
     if (!out) return;
     if (!seatMapPlan || !seatMapPlan.limit) { out.textContent = 'Erst Tickets wählen, dann zeigt die Karte die Auswahl.'; return; }
     if (!best) { out.textContent = on ? 'Keine passenden Plätze frei.' : ''; return; }
-    const cat = seatMapCategories(seatMapPlan).get(best.section);
-    const nums = best.seats.map((t) => t.seat).sort((a, b) => a - b).join(', ');
-    out.textContent = `→ Reihe ${best.row}, Platz ${nums}${cat ? ' · ' + cat.name : ''}`;
+    out.textContent = '→ ' + bestSeatsLabel(seatMapPlan, best);
   }
 
   function buildSeatPrefsPanel() {
@@ -1764,17 +1762,26 @@
     return best || bestGap;
   }
 
-  async function pickBestSeats(box) {
+  // "Reihe H, Platz 7, 8 · Parkett" for a bestSeatGroup result.
+  function bestSeatsLabel(plan, best) {
+    const cat = seatMapCategories(plan).get(best.section);
+    const nums = best.seats.map((t) => t.seat).sort((a, b) => a - b).join(', ');
+    return `Reihe ${best.row}, Platz ${nums}${cat ? ' · ' + cat.name : ''}`;
+  }
+
+  // Returns what happened, for the WebMCP tool: { picked, label, note }.
+  async function pickBestSeats(box, prefs = seatPrefs) {
     const plan = seatMapPlan;
-    if (!plan || seatMapAuto || seatMapBusy) return;
+    if (!plan || seatMapAuto || seatMapBusy) return { picked: false, note: 'busy' };
     const n = plan.limit;
-    if (!n) { seatMapHint(box, 'Erst die Anzahl der Tickets wählen.'); return; }
-    const best = bestSeatGroup(plan, n);
-    if (!best) { seatMapHint(box, `Keine ${n} freien Plätze nebeneinander.`); return; }
+    if (!n) { seatMapHint(box, 'Erst die Anzahl der Tickets wählen.'); return { picked: false, note: 'no tickets' }; }
+    const best = bestSeatGroup(plan, n, prefs);
+    if (!best) { seatMapHint(box, `Keine ${n} freien Plätze nebeneinander.`); return { picked: false, note: 'none free' }; }
+    const label = bestSeatsLabel(plan, best);
     const want = new Set(best.seats.map((t) => t.id));
     const mineOf = (p) => (p ? p.seats.filter((t) => t.mine) : []);
     const done = () => { const m = mineOf(readSeatPlan()); return m.length === n && m.every((t) => want.has(t.id)); };
-    if (done()) { seatMapHint(box, 'Das sind schon die besten Plätze.'); return; }
+    if (done()) { seatMapHint(box, 'Das sind schon die besten Plätze.'); return { picked: true, label, note: 'already selected' }; }
     // One tap at a time, each waiting until UCI has locked or released
     // and the selection has changed. UCI may move a pick to avoid a single
     // gap (deselecting J10 next to the aisle with J9 still picked left
@@ -1806,13 +1813,13 @@
         // A tap UCI ignored would only be ignored again.
         if (!next || !(await tapAndWait(next.id))) break;
       }
-      const cat = seatMapCategories(seatMapPlan || plan).get(best.section);
-      const nums = best.seats.map((t) => t.seat).sort((a, b) => a - b).join(', ');
-      seatMapHint(box, done() ? `Reihe ${best.row}, Platz ${nums}${cat ? ' · ' + cat.name : ''}`
-        : 'UCI hat die Auswahl angepasst. Bitte prüfen.');
+      const ok = done();
+      seatMapHint(box, ok ? label : 'UCI hat die Auswahl angepasst. Bitte prüfen.');
+      return { picked: ok, label, note: ok ? 'selected' : 'UCI adjusted the selection' };
     } catch (err) {
       console.warn(TAG, 'Beste Plätze failed:', err);
       seatMapHint(box, 'Plätze konnten nicht gewählt werden.');
+      return { picked: false, label, note: 'failed' };
     } finally {
       seatMapAuto = false;
       box.classList.remove('auto');
@@ -2609,7 +2616,7 @@
         title: 'Buchung lesen',
         description: 'Read the current UCI cinema booking: which step it is on (seats, payment, confirm), '
           + 'the film and showing, the seats in the basket with what covers each one, and the amount still to pay. '
-          + 'The user is logged in. Seats are picked by the user on the native seat map; '
+          + 'The user is logged in. Seats are picked on the seat map, by the user or with pick_best_seats; '
           + 'Unlimited cards can only be redeemed on the payment step.',
         inputSchema: { type: 'object', properties: {} },
         annotations: { readOnlyHint: true },
@@ -2629,6 +2636,51 @@
               seatsToPay: b.open, amountDue: Math.round(b.due * 100) / 100, bookingFee: lastFee },
             canRedeemUnlimited: stepAction()?.step === 'payment' && !scriptOff && !!b && b.open > 0,
           };
+        },
+      },
+      {
+        name: 'pick_best_seats',
+        title: 'Beste Plätze wählen',
+        description: 'On the seat step, select the best free seats side by side for the chosen ticket count, '
+          + 'the same as better-uci\'s "Beste Plätze" button: one row, one price category, scored by aisle, '
+          + 'centre, target row and price. The weights default to the user\'s saved ones; any given here '
+          + 'apply to this call only. preview: true only reports the pick. The user chooses the ticket '
+          + 'count first. Selecting only holds seats in the basket; nothing is booked or paid.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            preview: { type: 'boolean', description: 'Only report the pick, select nothing (default false)' },
+            aisle: { type: 'number', minimum: 0, maximum: 10, description: 'Importance of sitting at the aisle, 0–10' },
+            center: { type: 'number', minimum: 0, maximum: 10, description: 'Importance of sitting centrally, 0–10' },
+            row: { type: 'number', minimum: 0, maximum: 10, description: 'Importance of the target row (depth), 0–10' },
+            price: { type: 'number', minimum: 0, maximum: 10, description: 'Importance of the cheapest category, 0–10' },
+            depth: { type: 'number', minimum: 0, maximum: 100,
+              description: 'Target row, % from the screen (0) to the back wall (100); 67 = a third in from the back' },
+          },
+        },
+        run: async (input) => {
+          if (scriptOff) throw new Error('better-uci is switched off on this page.');
+          if (stepAction()?.step !== 'seats') throw new Error('Not on the seat step.');
+          mountSeatMap();
+          const box = document.getElementById('uci-seatmap');
+          if (!box || !seatMapPlan) throw new Error('The seat map has not loaded yet.');
+          if (!seatMapPlan.limit) throw new Error('No tickets chosen yet. The user picks the ticket count first.');
+          if (seatMapAuto) throw new Error('Seats are already being picked.');
+          const prefs = Object.assign({}, seatPrefs);
+          SEAT_PREF_ROWS.forEach(([key, , max]) => {
+            if (input[key] != null && Number.isFinite(+input[key])) prefs[key] = Math.min(max, Math.max(0, +input[key]));
+          });
+          const weights = Object.fromEntries(SEAT_PREF_ROWS.map(([key]) => [key, prefs[key]]));
+          const tickets = seatMapPlan.limit;
+          if (input.preview) {
+            const best = bestSeatGroup(seatMapPlan, tickets, prefs);
+            return best ? { preview: true, tickets, pick: bestSeatsLabel(seatMapPlan, best), weights }
+              : { preview: true, tickets, pick: null, note: `No ${tickets} free seats side by side.`, weights };
+          }
+          const r = await pickBestSeats(box, prefs);
+          const now = readSeatPlan();
+          return { picked: r.picked, tickets, pick: r.label || null, note: r.note, weights,
+            selected: now ? now.seats.filter((t) => t.mine).map((t) => `${t.row}${t.seat}`) : null };
         },
       },
       {

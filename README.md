@@ -109,6 +109,7 @@ through the site.
 | Tool | What it does |
 |---|---|
 | `get_booking_state` | Current step (seats, payment, confirm), film and showing, seats in the basket and what covers each one, amount still due. |
+| `pick_best_seats` | On the seat step, does what **★ Beste Plätze** does for the chosen ticket count. Weights (aisle, centre, row, price, target row) can be adjusted for one call, and `preview` only reports the pick. |
 | `list_unlimited_cards` | Your own card ("Ich", from your login) and saved friends' cards by name, with masked numbers and whether each is already redeemed on this booking. |
 | `redeem_unlimited_cards` | Redeems the named cards, yours and/or friends', on the payment step, at most one per open seat. |
 
@@ -119,8 +120,9 @@ What the agent can't do:
   you declined.
 - **See card numbers.** Only masked numbers (`1234…5678`) ever leave the
   script. Cards are chosen by name.
-- **Pick seats, check out or pay.** You pick seats on the seat map, and
-  pressing Weiter and paying stay with you.
+- **Check out or pay.** The agent can select seats with
+  `pick_best_seats`, after you've chosen the ticket count. That only holds
+  them, the same as tapping them. Pressing Weiter and paying stay with you.
 
 How to use it: you need a browser with WebMCP support (currently Chrome's
 early preview, behind a flag) and an agent that reads WebMCP tools. The
