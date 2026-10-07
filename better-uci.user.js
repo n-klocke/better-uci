@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         better-uci
 // @namespace    https://github.com/n-klocke/better-uci
-// @version      3.6.0
+// @version      3.6.1
 // @description  Batch-redeem UCI Unlimited cards on the booking page, and a denser, filterable programme browser on the kinoprogramm page.
 // @author       n-klocke
 // @license      MIT
@@ -1571,7 +1571,11 @@
   // (UCI's isAisleSeat, true at every block end), central, then near the
   // line one third back from the screen, rows in front of it and behind it
   // weighing the same. Weighted rather than strictly in order: one seat
-  // further from the aisle costs as much as ~3 seats off-centre or 4 rows.
+  // further from the aisle costs as much as ~3 seats off-centre or 4 rows,
+  // but beyond one row from the target the row cost grows steeply. Without
+  // that, East Side Gallery Kino 07's front row won: it has an aisle in the
+  // middle (at the wheelchair spaces), while the target row's aisle seats
+  // are only at the far ends.
   // UCI moves picks that would leave a single free seat next to them (seen
   // live: picking H2 with H1 free selected H1 instead), so such blocks are
   // only used when nothing else fits. Loveseat pairs aren't split, and
@@ -1622,7 +1626,8 @@
         const aisleDist = Math.min(...aisles.map((a) => (a < i ? i - a : a > end ? a - end : 0)));
         const gx = (g[0].x + g[n - 1].x + g[n - 1].w) / 2;
         const gy = g.reduce((s, t) => s + t.y + t.h / 2, 0) / n;
-        const cost = aisleDist + 0.3 * Math.abs(gx - cx) / seatW + 0.25 * Math.abs(gy - targetY) / rowPitch;
+        const rowDist = Math.abs(gy - targetY) / rowPitch;
+        const cost = aisleDist + 0.3 * Math.abs(gx - cx) / seatW + 0.25 * rowDist + Math.max(0, rowDist - 1) ** 2;
         const order = L === 0 || R !== 0 ? g : g.slice().reverse();
         const cand = { seats: order, cost, row: g[0].row, section: g[0].section };
         if (L === 1 || R === 1) { if (!bestGap || cost < bestGap.cost) bestGap = cand; }

@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.6.1
+
+- Beste Plätze no longer sends you to the front row in halls where only
+  the front row has a central aisle (East Side Gallery Kino 07). Rows
+  more than one away from the target now cost much more, so the aisle
+  and centre preferences apply among rows near it.
+
 ## 3.6.0
 
 - **★ Beste Plätze** on the seat map picks the best free seats side by
