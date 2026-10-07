@@ -1741,8 +1741,26 @@
     const minX = Math.min(...all.map((t) => t.x)), maxX = Math.max(...all.map((t) => t.x + t.w));
     const minY = Math.min(...all.map((t) => t.y)), maxY = Math.max(...all.map((t) => t.y + t.h));
     const seatW = median(all.map((t) => t.w)) || 1;
-    const rowYs = [...new Set(all.filter((t) => t.type !== 3).map((t) => Math.round(t.y)))].sort((a, b) => a - b);
-    const rowPitch = median(rowYs.slice(1).map((y, i) => y - rowYs[i])) || seatW;
+    // Row lines: the seats of one row label, split where the label comes
+    // back far away (a second block or a loge). Curved rows (East Side
+    // Gallery Kino 01 IMAX) give every seat its own y, so the distance to
+    // the target and the row pitch use each line's median y, not the
+    // seats' own. Distinct seat ys made the pitch about 1 unit there, and
+    // the row cost then sent the pick to whichever side seats curved
+    // closest to the target.
+    const byRow = new Map(), lines = [], rowY = new Map();
+    all.forEach((t) => { if (!byRow.has(t.row)) byRow.set(t.row, []); byRow.get(t.row).push(t); });
+    byRow.forEach((seats) => {
+      let line = [];
+      seats.sort((a, b) => a.y - b.y).forEach((t) => {
+        if (line.length && t.y - line[line.length - 1].y > seatW * 1.5) { lines.push(line); line = []; }
+        line.push(t);
+      });
+      lines.push(line);
+    });
+    lines.forEach((line) => { const y = median(line.map((t) => t.y + t.h / 2)); line.forEach((t) => rowY.set(t.id, y)); });
+    const lineYs = [...new Set(rowY.values())].sort((a, b) => a - b);
+    const rowPitch = median(lineYs.slice(1).map((y, i) => y - lineYs[i]).filter((d) => d > seatW / 2)) || seatW;
     // depth: 0 = at the screen, 100 = at the back wall.
     const cx = (minX + maxX) / 2, targetY = minY + (maxY - minY) * depth / 100;
 
@@ -1776,7 +1794,7 @@
         for (let k = end + 1; k < b.length && avail(b[k]); k++) R++;
         const aisleDist = Math.min(...aisles.map((a) => (a < i ? i - a : a > end ? a - end : 0)));
         const gx = (g[0].x + g[n - 1].x + g[n - 1].w) / 2;
-        const gy = g.reduce((s, t) => s + t.y + t.h / 2, 0) / n;
+        const gy = g.reduce((s, t) => s + rowY.get(t.id), 0) / n;
         const rowDist = Math.abs(gy - targetY) / rowPitch;
         const price = priceOf.get(g[0].section);
         const cost = k('aisle') * aisleDist ** 2 / (aisleDist + 3) + k('center') * 0.3 * Math.abs(gx - cx) / seatW
