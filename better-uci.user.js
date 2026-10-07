@@ -21,16 +21,12 @@
 (function () {
   'use strict';
 
-  // Storage. Tampermonkey has the synchronous GM_getValue/GM_setValue.
-  // Userscripts — the Safari extension this runs under on iPhone — has
-  // neither: it drops GM_* grants outright, so calling one throws a
-  // ReferenceError. That was the iPhone "Warenkorb wird gelesen…" hang
-  // (confirmed in the iOS simulator: the first poll() tick threw in
-  // wirePaymentMethodMemory and the loop never ran again). Userscripts only
-  // has the async GM.getValue/GM.setValue, so those values are read into a
-  // cache once, before init, and the rest of the script keeps synchronous
-  // get/set. Keys are listed here because the cache has to know them
-  // up front.
+  // Storage. Tampermonkey provides the synchronous GM_getValue/GM_setValue.
+  // Userscripts (the Safari extension used on iPhone) drops GM_* grants, so
+  // calling one there throws a ReferenceError; it only offers the async
+  // GM.getValue/GM.setValue. To keep get/set synchronous for the rest of
+  // the script, every key is read into a cache once before init, which is
+  // why the keys are listed up front.
   const STORE_KEYS = ['uci_cards_v1', 'uci_payment_method_v1', 'uci_browse_prefs_v1', 'uci_booking_off_v1'];
   const store = (() => {
     const sync = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
@@ -192,33 +188,32 @@
         gap: 20px;
       }
 
-      /* Fixed, modest column instead of the full row it used to occupy —
-         this alone frees up most of the width the seat map needs, which
-         is why the seat map itself doesn't need to shrink much if at all. */
+      /* A fixed 300px column for the ticket picker leaves the rest of the
+         row to the seat map, so the map itself needs little or no
+         shrinking. */
       #ticketselection { flex: 0 0 300px !important; max-width: 300px !important; }
-      /* Phone: the seat map already drops below (flex-wrap), so a fixed
-         300px column just left the picker a 246px card in a wider box. */
+      /* Phone: the seat map wraps below anyway, so the picker takes the
+         full width instead of a fixed 300px column. */
       @media (max-width: 640px) {
         #ticketselection { flex: 1 1 100% !important; max-width: none !important; }
       }
-      /* UCI's own #backdrop-wrapper-tickets (dark, 12px padding) plus a
-         15px .container padding wrapped our card in a second box, leaving
-         it 302px of 356px on a phone (measured), and on desktop three dark
-         layers around one list. The native wrapper is the card instead —
-         same box style as the seat map's beside or below it. */
+      /* UCI's own #backdrop-wrapper-tickets (dark, 12px padding) serves as
+         the picker's card, matching the seat map's box beside or below it.
+         #uci-tickets drops its own box and the 15px .container padding
+         goes; otherwise one list sits in three nested dark boxes and loses
+         ~50px of width on a phone. */
       #ticket-selection > .container { padding: 0 !important; }
       #uci-tickets { background: none !important; border: none !important; padding: 0 4px !important; }
-      /* Seat-map legend (PK 1 / PK 2 / PK 3 / PK 1 LOGE): at phone width
-         its labels broke mid-word ("PK / 1", "PK 1 / LOGE"). Keep each
-         label on one line and let the items wrap as a whole instead. */
+      /* Seat-map legend (PK 1 / PK 2 / PK 3 / PK 1 LOGE): each label stays
+         on one line and whole items wrap instead; at phone width the
+         labels otherwise break mid-word ("PK / 1", "PK 1 / LOGE"). */
       #SeatingPlanComponentLayoutFooter > div > div { flex-wrap: wrap; justify-content: center; row-gap: 6px; }
       #SeatingPlanComponentLayoutFooter > div > div * { white-space: nowrap; }
-      /* Legend sized down: 17px text and 22px swatches, with 10px margin +
-         10px padding + 10px item margin stacked under it, made it the
-         largest text in the seat map box and left ~30px of dead space at
-         its bottom (measured live). Structure (also measured): row >
-         item > [swatch, label]. Swatch sizes via !important in case UCI
-         ever sets them inline. */
+      /* Legend scaled down to fit the seat map: natively 17px text, 22px
+         swatches and ~30px of stacked margin/padding, the largest text in
+         the box with dead space below it. Structure: row > item >
+         [swatch, label]. Swatch sizes are !important in case UCI ever sets
+         them inline. */
       #SeatingPlanComponentLayoutFooter > div > div { padding: 4px 0 0 !important; margin: 6px 0 0 !important;
         column-gap: 14px; font-size: 12.5px !important; }
       #SeatingPlanComponentLayoutFooter > div > div > div { margin: 0 !important; align-items: center; }
@@ -232,12 +227,10 @@
          node the way an ID-selector rule does. */
       #ticket-type-container { display: none !important; }
 
-      /* #ticket-type-container itself is hidden (not removed — its
-         buttons are still clicked programmatically, see
-         mountTicketSelector), so nothing here targets it anymore. This
-         styles the real replacement panel instead — a segmented pill
-         stepper rather than spread-out circle buttons, closer to how
-         modern quantity pickers actually look. */
+      /* The replacement ticket picker (see mountTicketSelector): one row
+         per ticket type with a segmented pill stepper. The native
+         #ticket-type-container stays in the DOM, hidden, because its
+         buttons are clicked programmatically. */
       #uci-tickets {
         background: #10141c; border: 1px solid rgba(255,255,255,.08);
         border-radius: 14px; padding: 4px 16px; color: #fff; font-size: 14px;
@@ -247,9 +240,9 @@
         gap: 12px; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,.06);
       }
       #uci-tickets .tk2-row:last-child { border-bottom: none; }
-      /* Always a column: inline-with-wrap put the price beside short
-         labels but under long ones (confirmed live: 2 of 4 rows wrapped),
-         so prices zig-zagged between two positions. */
+      /* Label and price always stacked: letting the price wrap inline puts
+         it beside short labels and below long ones, so prices zig-zag
+         between two positions. */
       #uci-tickets .tk2-info { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 0; }
       #uci-tickets .tk2-hint { font-size: 11px; color: #ffd77f; text-align: left; white-space: nowrap; }
       #uci-tickets .tk2-label { font-size: 13.5px; font-weight: 600; }
@@ -259,11 +252,9 @@
         background: rgba(255,255,255,.06); border-radius: 999px; padding: 2px;
       }
       #uci-tickets .tk2-btn {
-        /* min-height:0 is load-bearing, not a redundant reset: this site
-           sets a global min-height:45px on <button> elements (confirmed
-           via getComputedStyle while debugging the seat map, where the
-           same thing turned 24-30px circles into ovals). Without this,
-           height:24px gets silently clamped to 45px. */
+        /* min-height:0 is required: the site sets min-height:45px on every
+           <button>, which would silently stretch these 24px circles into
+           45px-tall ovals. */
         position: relative; width: 24px; height: 24px; min-width: 24px; min-height: 0;
         border-radius: 50%; border: none; background: transparent;
         cursor: pointer; transition: background .15s;
@@ -285,17 +276,15 @@
       }
       #uci-tickets .tk2-count { min-width: 18px; text-align: center; font-size: 13.5px; font-weight: 700; }
 
-      /* Deliberately no sizing changes to the seat map or its canvas here
-         — see the accompanying explanation for why. It just takes
-         whatever room the flex row leaves it. overflow-x is a safety net
-         for narrow viewports: scrolling is safe, silently rescaling a
-         canvas the site may do click coordinate math against is not. */
+      /* No sizing changes to the seat map or its canvas: it takes whatever
+         room the flex row leaves. On narrow viewports it scrolls instead,
+         because rescaling a canvas the site may do click-coordinate math
+         against could break seat picking. */
       .backdrop-wrapper:has(#seatingplan) { flex: 1 1 auto !important; min-width: 0; overflow-x: auto; }
 
-      /* Was a full-width bar sized for the old single-column layout — now
-         sits on its own row below both columns, styled with the same
-         accent used for EINLÖSEN and the active states elsewhere rather
-         than the site's default blue. */
+      /* #stepControl gets its own row below both columns, in the same
+         yellow accent as EINLÖSEN and the active states elsewhere instead
+         of the site's default blue. */
       #stepControl { flex: 1 1 100% !important; margin-top: 14px; text-align: right; }
       #stepControl .btn-block {
         display: inline-block !important; width: auto !important; min-width: 160px;
@@ -304,8 +293,8 @@
         border: none !important; border-radius: 6px !important;
         font-weight: 700 !important; letter-spacing: .3px;
       }
-      /* Plain grey when disabled: the 28% yellow came out a murky olive on
-         the dark page. */
+      /* Plain grey when disabled: a translucent yellow reads as murky olive
+         on the dark page. */
       #stepControl .btn-block:disabled {
         background: rgba(255,255,255,.08) !important; color: rgba(255,255,255,.35) !important;
       }
@@ -317,7 +306,7 @@
          in the DOM and is only positioned over the bar: its click wiring
          is UCI's, scope unknown (same caution as the payment cards).
          Position:fixed still escapes the payment card's overflow:hidden,
-         since no ancestor has a transform (checked live). --uci-sb-l/-r
+         since no ancestor has a transform. --uci-sb-l/-r
          line it all up with the step's content column. */
       html.uci-bar #customer-cart { display: none !important; }
       html.uci-bar body { padding-bottom: 76px !important; }
@@ -341,16 +330,16 @@
          line that must be read in full. */
       #uci-stepbar.uci-sb-warn .uci-sb-sub { color: #f2c94c; white-space: normal; }
 
-      /* Payment and confirm step in one 640px column, the same width as the
-         header above (#booking-info .container) — the cards were ~930px
-         wide with the card panel (max 620px) filling only the left half.
-         The seat step stays wide for the seat map. */
+      /* Payment and confirm steps in one 640px column, the same width as
+         the header above (#booking-info .container). Natively the cards
+         are ~930px wide, with the card panel (max 620px) filling only the
+         left half. The seat step stays wide for the seat map. */
       #payment-selection, #payment-confirmation { max-width: 640px !important; }
 
       /* The Unlimited Card section is always open (ensureAlwaysExpanded), so
-         its 22px heading and chevron were a toggle that did nothing — a
-         small label now. pointer-events off: a click would only start
-         UCI's collapse before the next poll tick reopens it. */
+         its 22px heading and chevron would be a toggle that does nothing;
+         it's restyled as a small label. pointer-events off: a click would
+         only start UCI's collapse before the next poll tick reopens it. */
       #payment-type-uc-header { padding: 10px 12px 6px !important; background: none !important;
         border: none !important; pointer-events: none; cursor: default; }
       #payment-type-uc-header h2 { font-size: 11.5px !important; font-weight: 700; color: #8b97a8;
@@ -374,8 +363,8 @@
       }
       #uci-stepbar .uci-sb-sum { font-size: 14px; font-weight: 700; color: #fff;
         white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      /* Phone: a narrower Weiter and less room reserved for it — at 190px
-         the total wrapped ("33,80 / €") in a 390px viewport (measured). */
+      /* Phone: a narrower Weiter and less room reserved for it; with 190px
+         reserved, the total wraps ("33,80 / €") in a 390px viewport. */
       @media (max-width: 640px) {
         /* #stepControl too: its own .btn-block rule outranks a bare class. */
         .uci-bar-action, #stepControl .uci-bar-action { min-width: 0 !important; padding: 10px 26px !important; }
@@ -400,32 +389,25 @@
       #uci-step-hint { display: block; margin-top: 6px; font-size: 12px; color: #8b97a8; }
       #uci-step-hint[hidden] { display: none; }
 
-      /* Payment step accordion (Unlimited Card / Movie Points / Gutscheine /
-         Buchungsabschluss / Zahlung hinterlegen) — a stack of Bootstrap
-         .card sections. Two of their IDs are confirmed elsewhere in this
-         script (goToCheckout() already opens #init-checkout-and-payment-
-         type-select-content programmatically; HOST_SEL already targets
-         #payment-type-uc-content .card-body) — the other three sections'
-         own IDs are NOT confirmed. .card-header/.card-body below are
-         Bootstrap's own class names, not a guess at site-specific IDs, so
-         this should reach every section, but hasn't been checked against
-         the live page yet. If Movie Points/Gutscheine/Zahlung hinterlegen
-         don't pick this up, they need their own IDs added here. */
+      /* Payment-step accordion (Unlimited Card / Movie Points / Gutscheine /
+         Buchungsabschluss / Zahlung hinterlegen): a stack of Bootstrap
+         .card sections, styled through Bootstrap's generic .card-header/
+         .card-body classes so every section is covered without listing
+         their ids. */
       .card-header {
         background: #10141c !important; border: 1px solid rgba(255,255,255,.08) !important;
         color: #fff !important; font-weight: 600 !important; min-height: 0;
       }
       .card-header:hover { background: #171d29 !important; }
-      /* Every section's content currently stretches full-width with the
-         actual form/button/text occupying only the left portion — this
-         caps it near the width the content actually uses, closing up the
-         dead space on the right without touching any field's own layout. */
+      /* Section content stretches full width while the form, button or
+         text only uses the left part. Capping the width near what the
+         content uses closes up the empty space on the right without
+         touching any field's own layout. */
       .card-body { max-width: 760px; }
 
-      /* Sweepstakes banner inside "Buchungsabschluss" (confirmed id) — a
-         large promo image that currently pushes the actual opt-in
-         checkbox and continue button further down than necessary.
-         Shrunk, not hidden: the checkbox, legal text, and button are
+      /* Sweepstakes banner inside Buchungsabschluss: shrunk so the large
+         promo image doesn't push the opt-in checkbox and Weiter button far
+         down. Not hidden; the checkbox, legal text and button are
          untouched. */
       #init-checkout-and-payment-type-select-content img {
         max-height: 130px; width: auto; object-fit: cover;
@@ -438,16 +420,6 @@
         background: rgba(255,255,255,.08); color: #8b97a8;
         font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px;
       }
-
-      /* Unlimited Card is auto-expanded by ensureAlwaysExpanded() in JS on
-         every poll tick. The header keeps its own click-to-expand anyway
-         (it used to be cursor:default + pointer-events:none + hidden
-         chevron), as a manual fallback if the script's JS ever stops. On
-         iPhone it did: the section loaded neither expanded nor expandable.
-         That was first blamed on a timing race, but the real cause was
-         poll() dying on its first tick (GM_getValue doesn't exist under
-         Userscripts, see store at the top), so ensureAlwaysExpanded()
-         never ran at all. */
 
       /* Movie Points / Gutscheine — demoted behind #uci-secondary-toggle
          (see setupLeanPaymentExtras()). Hidden by default; once revealed,
@@ -465,76 +437,53 @@
       #uci-secondary-toggle {
         display: block; width: 100%; text-align: left; background: none; border: none;
         color: #8b97a8; font-size: 12px; cursor: pointer; padding: 6px 2px; min-height: 0;
-        /* The site's button CSS uppercases it (seen live). */
+        /* The site's button CSS would uppercase it. */
         text-transform: none !important;
       }
       #uci-secondary-toggle:hover { color: #cfd6e0; }
       #uci-secondary-toggle::before { content: '▸ '; }
       #uci-secondary-toggle.open::before { content: '▾ '; }
 
-      /* Buchungsabschluss: forced open by ensureAlwaysExpanded() too, and
-         its header hidden entirely rather than just made unclickable —
-         unlike Unlimited Card, this section's real content (the "Weiter"
-         button, renamed by renameCheckoutButton()) doesn't need a heading
-         of its own, so the whole card is stripped down to just that
-         button rather than kept looking like a collapsed accordion item. */
+      /* Buchungsabschluss: forced open by ensureAlwaysExpanded() as well,
+         with its header hidden entirely. Its only real content is the
+         Weiter button (renamed by renameCheckoutButton()), so the card is
+         stripped down to just that button. */
       #init-checkout-and-payment-type-select-header { display: none !important; }
       .card:has(#init-checkout-and-payment-type-select-header) {
         background: none !important; border: none !important; box-shadow: none !important;
       }
-      /* "Nach diesem Schritt haben Sie keine Möglichkeit mehr..." — the
-         real warning about losing voucher/Movie Points access, sitting
-         right above the Weiter button. Only one bare <p> lives directly in
-         this card-body; the promo-contest widget's own <p>s are nested
-         inside #promo-contest-widget, which the native page already keeps
-         display:none unless a contest is actually running, so this can't
-         accidentally catch those instead. Since moved one level down into
-         a .tab-pane (confirmed live: it's still the only <p> anywhere in
-         #payment-type-paid-content), so both positions are covered. */
+      /* "Nach diesem Schritt haben Sie keine Möglichkeit mehr...", the
+         warning above Weiter about losing voucher/Movie Points access. It's
+         the only <p> in #payment-type-paid-content, either directly or one
+         level down in a .tab-pane, so both positions are matched. The
+         promo-contest widget's <p>s are nested deeper inside
+         #promo-contest-widget and aren't caught. */
       #payment-type-paid-content > p,
       #payment-type-paid-content > .tab-content > .tab-pane > p { display: none !important; }
 
-      /* #payment-selection's own "ZAHLUNGSMITTEL" heading and subtitle —
-         redundant once the accordion below it is self-explanatory (forced-
-         open Unlimited Card, a lean toggle for the rest, a bare Weiter
-         button). display:none removes their box entirely, so the
-         accordion below moves up on its own — no separate margin fix
-         needed here the way the fixed-header stack earlier needed one. */
+      /* #payment-selection's own "ZAHLUNGSMITTEL" heading and subtitle:
+         redundant with the restyled accordion below (always-open Unlimited
+         Card, a toggle for the rest, a bare Weiter button). */
       #payment-selection > h2, #payment-selection > p.text-center {
         display: none !important;
       }
 
-      /* Native #booking-info header (poster + date/time/cinema/FSK block
-         above the seat step) — was a tall, wide slab with a large poster
-         and a whole FSK callout box. Restyled into one compact row, text
-         sizes matched to .film-row from the browse experience below
-         (initBrowse) for a consistent look across both halves of this
-         script. FSK is dropped entirely, per explicit request — nothing
-         reads it after this point, unlike parseCard()'s fsk field on the
-         browse side, which is unrelated (different page, different DOM). */
-      /* padding was reset here already; margin was not — if the native
-         page clears the fixed header stack via margin-top rather than
-         padding (a common pattern), that would explain a gap surviving
-         every fix so far, since nothing above ever touched margin. */
+      /* Native #booking-info header (poster + date/time/cinema/FSK above
+         the seat step), restyled from a tall slab into one compact row,
+         with text sizes matching .film-row on the programme page
+         (initBrowse). The FSK callout is dropped. */
       #booking-info { padding: 10px 0 !important; margin: 0 !important; }
-      /* Confirmed via getComputedStyle: the real culprit was never
-         #booking-info at all — it's body.layout-dark's own margin-top,
-         hardcoded to 95px to clear the *original* (much taller) header
-         stack. Now 30px: #uci-header's measured height (29px + its 1px
-         hairline) once #booking-header is merged into the same row —
-         see the header block below. */
+      /* body.layout-dark has a hardcoded margin-top of 95px to clear the
+         native two-bar fixed header. The merged header below is 30px tall
+         (29px + 1px hairline), so the margin matches that. */
       body.layout-dark { margin-top: 30px !important; }
       #booking-info .container { max-width: 640px; }
       #booking-info .booking-info-container {
         display: flex !important; align-items: center !important; gap: 12px;
       }
-      /* .left-item/.right-item and the container itself kept whatever
-         height the native (much larger) poster+FSK-box content used to
-         need, even after that content shrank — the block stayed the same
-         overall height with dead space around the smaller content inside
-         it. Stripped generically (min-height/height reset) rather than
-         guessed at with one fixed #booking-info height, since which of
-         these was actually the source isn't confirmed. */
+      /* Height resets on #booking-info and its children: they otherwise
+         keep the height the native poster and FSK box needed, leaving dead
+         space around the smaller content. */
       #booking-info, #booking-info .booking-info-container,
       #booking-info .left-item, #booking-info .right-item {
         min-height: 0 !important; height: auto !important;
@@ -558,13 +507,8 @@
 
       /* Fixed top bars above #booking-info: #uci-header (logo + account
          name) with #booking-header (back link + film title) nested inside
-         it. The title is dropped entirely — same film is already shown
-         right below in #booking-info, so it's pure repetition — and both
-         rows get tighter padding. #booking-header itself is positioned via
-         an inline top offset the native page sets to sit right under
-         #uci-header; shrinking #uci-header's own height here could leave
-         that stale (a few px gap) if the site only computes it once rather
-         than on every layout change — worth confirming on reload. */
+         it. The film title is dropped, since #booking-info right below
+         already shows it, and both rows get tighter padding. */
       #booking-header .filmTitle { display: none !important; }
       #booking-header .row {
         min-height: 0 !important; padding: 3px 0 !important; line-height: 1;
@@ -575,48 +519,32 @@
       #uci-header > .container > .row {
         min-height: 0 !important; padding: 3px 0 !important; line-height: 1;
       }
-      /* Shrinking the .row above had no visible effect on the bars
-         themselves — the same symptom #booking-info had before its
-         min-height/height reset below: an inner row can get shorter
-         while the fixed-position bar wrapping it keeps whatever height
-         (likely an explicit one, since #booking-header's inline top:45px
-         implies the site pins #uci-header to a fixed height rather than
-         sizing it to content) it had before. Same generic strip applied
-         to the outer elements themselves this time, not just their .row. */
+      /* The bars and their containers need the height reset too, not just
+         the inner .row: the site sizes the fixed bars explicitly, so a
+         shorter row alone leaves the bar's height unchanged. */
       #uci-header, #uci-header .container,
       #booking-header, #booking-header .container {
         min-height: 0 !important; height: auto !important;
       }
-      /* Confirmed via a real screenshot: a visible gap now sits between
-         #uci-header and #booking-header specifically — exactly the stale-
-         offset risk flagged above. #booking-header's inline top:45px was
-         hand-tuned to #uci-header's native ~45px height and never
-         recalculated after the CSS above shrank it. 30px is computed from
-         the values this file itself now sets (22px logo + 3px+3px row
-         padding), not a guess at unknown native sizing — !important is
-         required since only that beats an inline style, regardless of
-         selector specificity. */
-      /* #booking-header (just the back link) now overlays #uci-header's
-         row instead of stacking below it — see the merged-header block at
-         the end. Its old offset was top:30px (computed from this file's
-         own 22px logo + 3px+3px padding) to sit under #uci-header. */
+      /* #booking-header (just the back link) overlays #uci-header's row
+         instead of stacking below it; see the merged header below. The
+         site positions it with an inline top:45px, sized for the native
+         header and never recomputed, and only !important beats an inline
+         style. */
       #booking-header { top: 0 !important; }
-      /* The logo <img> carries a real inline style="height:40px" (confirmed
-         from the live markup) — only an !important rule can move it, since
-         an inline style otherwise beats any plain CSS selector regardless
-         of specificity. */
+      /* The logo <img> has an inline style="height:40px", which only an
+         !important rule can override. */
       #uci-header img { height: 22px !important; }
       #uci-header .text-contains-displayname { font-size: 11px; line-height: 22px; }
-      /* Merged header. Measured live: #uci-header was a light-grey
-         (229,229,229) 29px bar with a logo and the account name, and
-         #booking-header a second, slate (64,75,98) 25px bar below it with
-         a lone back chevron and a 1px white seam — two heavy bars holding
-         almost nothing. Now one row on the page's own background: "‹
-         Zurück" on the left (where the logo was — its link is just "#",
-         so hiding it loses nothing), name on the right, one hairline.
-         #booking-header sits on top of #uci-header's row (top:0 above)
-         with pointer-events off except on the back link itself, so the
-         row underneath stays clickable (checked with elementFromPoint). */
+      /* Merged header. Natively #uci-header is a light-grey 29px bar with
+         the logo and account name, and #booking-header a slate 25px bar
+         below it holding only a back chevron: two heavy bars with almost
+         nothing in them. Here they form one row on the page's own
+         background: "‹ Zurück" on the left where the logo was (its link is
+         just "#", so hiding it loses nothing), the name on the right, one
+         hairline. #booking-header lies over #uci-header's row (top:0
+         above) with pointer-events off except on the back link, so the
+         row underneath stays clickable. */
       #uci-header { background: rgb(0,15,46) !important;
         border-bottom: 1px solid rgba(255,255,255,.12) !important; }
       #uci-header .text-contains-displayname { color: #8b97a8 !important; }
@@ -647,15 +575,12 @@
   const MAX_ATTEMPTS = 4;
 
   // The page's own globals: window.book (booking state) and its jQuery.
-  // Tampermonkey hands this script the page window as unsafeWindow.
-  // Userscripts (iPhone) has no unsafeWindow, and because this script asks
-  // it for GM.getValue/GM.setValue it runs in Safari's isolated content
-  // world, which can't see page globals at all. There they're reached
-  // through pageBridge below instead. Keyed on book, never on $ alone: that
-  // content world has a global $ of its own. Userscripts' minified content
-  // script declares a top-level `async function $` (its saveTab), which
-  // made the first 3.1.7 draft take that world for the page (seen in the
-  // simulator: "Seite:direkt" while book was unreadable).
+  // Tampermonkey exposes the page window as unsafeWindow. Userscripts
+  // (iPhone) has no unsafeWindow and, because of the GM.* grants, runs this
+  // script in Safari's isolated content world, which can't see page
+  // globals; there they're reached through pageBridge instead. Detection
+  // keys on book, never on $: that content world has a global $ of its own
+  // (Userscripts' content script declares `async function $`).
   function pageWin() {
     const c = [];
     try { if (typeof unsafeWindow !== 'undefined') c.push(unsafeWindow); } catch {}
@@ -665,16 +590,9 @@
   }
   const useBridge = typeof unsafeWindow === 'undefined';
 
-  // Runs in the page's own JS world: pageBridge injects it as an inline
-  // <script>, which UCI allows (no Content-Security-Policy, checked). It
-  // answers requests from this script over DOM events on document. Payloads
-  // are JSON strings both ways, because Safari doesn't share event.detail
-  // objects between worlds, only primitives. Only primitive fields of each
-  // price row are copied. That covers every field this file reads, and
-  // skips anything the page attached that wouldn't survive JSON.
   // The seat map's own seat models (book.seatingApp, Backbone). They stay
-  // loaded on the payment step too, with the picked seats still selected
-  // (seen live). These three run in whichever world can see book: called
+  // loaded on the payment step too, with the picked seats still selected.
+  // These three run in whichever world can see book: called
   // directly with getBook()/pageWin(), or on the page side of pageBridge,
   // which gets their source injected alongside its own.
   function seatModelsOf(b) {
@@ -696,6 +614,13 @@
     });
   }
 
+  // Runs in the page's own JS world: pageBridge injects it as an inline
+  // <script>, which UCI allows (it sends no Content-Security-Policy). It
+  // answers requests from this script over DOM events on document. Payloads
+  // are JSON strings both ways, because Safari doesn't share event.detail
+  // objects between worlds, only primitives. Only primitive fields of each
+  // price row are copied. That covers every field this file reads, and
+  // skips anything the page attached that wouldn't survive JSON.
   function pageBridgeMain(ch) {
     const reply = (id, msg) => document.dispatchEvent(new CustomEvent(ch + ':res',
       { detail: JSON.stringify(Object.assign({ id }, msg)) }));
@@ -793,12 +718,11 @@
 
   // Hands a server response to the page so its own views (cart bar, ticket
   // list) update. The page's refreshCustomerCart puts a loading mask with a
-  // spinner over the cart bar and never takes it off itself; UCI's own
-  // voucher flow removes it afterwards (removeBlockingMaskFromTicketRelatedContent).
-  // Without the same step the spinner stayed over the total after every
-  // redeem (confirmed on the live page, 2026-10-05). Only the cart bar's
-  // mask is removed, and only once the page has re-rendered the cart. The
-  // DOM is shared, so this works in both Tampermonkey and the bridge.
+  // spinner over the cart bar and never removes it; UCI's own voucher flow
+  // removes it afterwards (removeBlockingMaskFromTicketRelatedContent), so
+  // this does the same once the page has re-rendered the cart. Only the
+  // cart bar's mask is removed. The DOM is shared, so this works both
+  // directly and through the bridge.
   async function applyToPage(resp) {
     await getBook().handleBookingServerSuccess(resp);
     document.querySelectorAll('#customer-cart .blocking-mask').forEach((m) => m.remove());
@@ -1056,35 +980,24 @@
     return runQueue(queue);
   }
 
-  // Scrolls to the "Weiter" (checkout) button. Deliberately does NOT press
-  // it: that step locks out vouchers and Movie Points for the rest of the
-  // booking. Used to also force-open the accordion header first — no
-  // longer needed now that ensureAlwaysExpanded() keeps this section open
-  // permanently (see below), and the header itself is hidden entirely, so
-  // the button is the only real target left to scroll to.
+  // Scrolls to the "Weiter" (checkout) button but deliberately doesn't
+  // press it: that step locks out vouchers and Movie Points for the rest
+  // of the booking. ensureAlwaysExpanded() keeps the section open, so
+  // there's nothing to expand first.
   function goToCheckout() {
     const btn = document.getElementById('init-checkout-process-button');
     if (!btn) return;
     setTimeout(() => btn.scrollIntoView({ behavior: 'smooth', block: 'center' }), 300);
   }
 
-  // Some payment-step accordion sections shouldn't behave like accordions
-  // at all — Unlimited Card should just always be open (it's the primary
-  // path this whole panel exists for), and Buchungsabschluss's real
-  // content is just the "Weiter" button, not something worth a click to
-  // reveal. Re-adding the 'show' class every poll tick (rather than
-  // fighting Bootstrap's collapse plugin directly, whose exact version/
-  // event names aren't confirmed on this page) is what actually keeps
-  // these open even if the site's own accordion logic — e.g. its
-  // data-parent mutual-exclusion behavior when another section opens —
-  // tries to close them. Both the class and the inline height reset are
-  // unconditional on every tick now, not just when 'show' is missing:
-  // Bootstrap's collapse can leave 'show' applied while height is still
-  // mid-transition (e.g. stuck at an inline '0px' from an interrupted
-  // animation) — that combination previously fell through this function
-  // untouched since the old guard only fired when 'show' itself was
-  // absent, leaving the panel visually collapsed with no further poll
-  // tick able to fix it.
+  // Keeps an accordion section permanently open: Unlimited Card is the
+  // main path this panel exists for, and Buchungsabschluss holds nothing
+  // but the Weiter button. Called every poll tick instead of hooking
+  // Bootstrap's collapse plugin (its version and event names on this page
+  // are unknown), so it also undoes the site closing a section, e.g. via
+  // data-parent when another one opens. The inline height is reset every
+  // time too, not only when 'show' is missing: an interrupted collapse
+  // animation can leave 'show' set with the height stuck at 0px.
   function ensureAlwaysExpanded(id) {
     const el = document.getElementById(id);
     if (!el) return;
@@ -1092,17 +1005,12 @@
     el.style.height = '';
   }
 
-  // Movie Points and Gutscheine are real, occasionally-needed features,
-  // just not ones most bookings touch — demoting them behind one shared,
-  // lean toggle (a plain button, not another accordion card) keeps them
-  // reachable without competing visually with Unlimited Card / Weiter.
-  // Deliberately does NOT move either .card in the DOM (only adds classes
-  // + a new sibling button): the site's own click-to-expand wiring on
-  // each card's header has no confirmed data-toggle attribute, meaning
-  // it's bound by custom site JS whose delegation scope isn't known —
-  // relocating those nodes elsewhere in the tree could silently break
-  // that if it's scoped to their current parent. Adding classes and a
-  // sibling carries none of that risk.
+  // Movie Points and Gutscheine are needed now and then, but not by most
+  // bookings, so both sit behind one plain toggle button instead of
+  // competing with Unlimited Card and Weiter. Neither .card is moved in
+  // the DOM, only given classes and a sibling button: their headers'
+  // click-to-expand is wired by the site's own JS (no data-toggle) with
+  // an unknown delegation scope, so relocating them could break it.
   function setupLeanPaymentExtras() {
     if (document.getElementById('uci-secondary-toggle')) return;
     const mpCard = document.getElementById('payment-type-mp-header')?.closest('.card');
@@ -1156,17 +1064,12 @@
     hint.hidden = !btn.disabled;
   }
 
-  // Reads the "Gutscheine einlösen" panel's own content to add a "leer"
-  // hint next to its (collapsed-by-default) header, so an empty account
-  // doesn't need a click just to find out it's empty. This only reads —
-  // never clicks — so it works regardless of whether the panel has ever
-  // been opened: Bootstrap's .collapse keeps a panel's content in the DOM
-  // and toggles visibility via CSS, it doesn't remove/defer the content
-  // itself. Identifies the panel by its visible header text rather than
-  // an id, since only two of these five accordion sections' ids are
-  // confirmed (see the payment-step CSS above) — matches the exact
-  // "no vouchers" string the site itself shows, so a false positive would
-  // require the site changing its own copy, not a structural guess.
+  // Adds a "leer" badge to the collapsed "Gutscheine einlösen" header when
+  // the account has no vouchers, so nobody has to open it to find out.
+  // Only reads, never clicks: Bootstrap's .collapse keeps a closed panel's
+  // content in the DOM. The panel is found by its header text and the
+  // site's exact "keine Gutscheine hinterlegt" wording, so a false
+  // positive would need UCI to change that copy.
   function annotateEmptyVoucherPanel() {
     const header = [...document.querySelectorAll('.card-header')]
       .find((h) => /Gutscheine einlösen/i.test(h.textContent));
@@ -1181,18 +1084,13 @@
     header.appendChild(badge);
   }
 
-  // Remembers which payment method (PayPal vs. Kreditkarte) was used last
-  // and pre-selects it, so switching to a card once doesn't mean re-
-  // clicking past the site's own default every booking after. Targets
-  // the two tab links by their confirmed ids (read from the live payment
-  // step) — NOT by text: the same section also holds "JETZT PAYPAL
-  // ZAHLUNG HINTERLEGEN" / "JETZT ZAHLUNG MIT KREDITKARTE HINTERLEGEN"
-  // buttons, which start registering a payment method. The old
-  // first-text-match only hit the tabs because they happen to come first
-  // in the markup. If either id is missing, nothing is clicked. Clicking
-  // an already-active Bootstrap tab is a no-op, and this only ever
-  // clicks once per page load (paymentMethodApplied), so it can't fight
-  // the user if they then pick something else.
+  // Remembers the payment method (PayPal or Kreditkarte) used last and
+  // pre-selects it on the next booking, instead of the site's default.
+  // Targets the two tab links by id, not by text: the same section also
+  // has "JETZT PAYPAL ZAHLUNG HINTERLEGEN" / "JETZT ZAHLUNG MIT KREDITKARTE
+  // HINTERLEGEN" buttons, which start registering a payment method. If
+  // either id is missing, nothing is clicked. It clicks at most once per
+  // page load (paymentMethodApplied), so it never fights a manual choice.
   const PAYMENT_METHOD_KEY = 'uci_payment_method_v1';
   let paymentMethodApplied = false;
   function wirePaymentMethodMemory() {
@@ -1254,9 +1152,9 @@
     return { title, version, when, where };
   }
   // UCI first renders placeholders ("Filmtitel wird geladen...", "Datum
-  // und Zeit werden geladen...") and fills them in later; built from those,
-  // the header stayed on them (seen live). So nothing is built while any
-  // part still says "geladen", and it's rebuilt whenever the parts change.
+  // und Zeit werden geladen...") and fills them in later. So nothing is
+  // built while any part still says "geladen", and the box is rebuilt
+  // whenever the parts change.
   function compactPerfInfo() {
     const right = document.querySelector('#booking-info .right-item');
     if (!right) return;
@@ -1347,16 +1245,15 @@
   }
 
   // Bottom bar for the seat, payment and confirm steps (CSS above). Each
-  // step is recognized by its own button being rendered: UCI hides each
-  // step's button once the next step shows (checked live on all three);
-  // on any other step its own #customer-cart bar takes over again. The
-  // confirm step's JETZT KAUFEN is a submit button inside its terms form,
-  // and stays inside it — only positioned — so submitting is unchanged;
-  // it's disabled until the terms are accepted. The free
-  // variant (#payment-type-free-content, shown instead when cards cover
-  // the whole price) is assumed, not yet seen live. Re-rendered on every
-  // change to the cart (cartObserver) and every poll tick, which also
-  // re-aligns it.
+  // step is recognized by its own button being rendered, since UCI hides
+  // a step's button once the next step shows; on any other step UCI's own
+  // #customer-cart bar takes over again. The confirm step's JETZT KAUFEN
+  // is a submit button inside its terms form and stays there (only
+  // positioned), so submitting is unchanged; it's disabled until the
+  // terms are accepted. The free variant (#payment-type-free-content,
+  // shown instead when cards cover the whole price) is handled but hasn't
+  // been seen on the live site yet. Re-rendered on every cart change
+  // (cartObserver) and every poll tick, which also re-aligns it.
   const rendered = (el) => !!el && el.getClientRects().length > 0;
   function stepAction() {
     const seat = document.getElementById('nextStepButton') || document.querySelector('#stepControl .btn-block');
@@ -1365,9 +1262,9 @@
     }
     const pay = [document.getElementById('init-checkout-process-button'),
       ...document.querySelectorAll('#payment-type-free-content .btn')].find(rendered);
-    // The cards' own edges, not #payment-selection: that .container has 15px
-    // of padding, which put the bar's text and button 13–15px outside the
-    // cards (measured live).
+    // Aligned to the cards' own edges, not #payment-selection, whose 15px
+    // .container padding would put the bar's text and button outside the
+    // cards.
     if (pay) return { step: 'payment', btn: pay, column: document.getElementById('payment-type-accordion'), hint: '' };
     const buy = document.getElementById('jetzt-kaufen-button');
     if (rendered(buy)) {
@@ -1409,18 +1306,17 @@
     // "18.40 €", or "0.00 € (9.90 €)" once cards cover it (confirm step).
     let total = (cart?.querySelector('.customer-cart-total-price')?.textContent.trim() || '')
       .replace(/(\d)\.(\d\d)/g, '$1,$2').replace(/\(\s*(?=\d)/, '(statt ');
-    // One cart line per row, "PK 2 | Reihe J | Sitz 13, 14" (seen live),
-    // merged per row label → "Reihe J: Sitz 13, 14".
+    // One cart line per row, "PK 2 | Reihe J | Sitz 13, 14", merged per
+    // row label → "Reihe J: Sitz 13, 14".
     const rows = new Map();
     const addSeats = (row, nums) => rows.set(row, [...(rows.get(row) || []), ...nums]);
     cart?.querySelectorAll('.cart-content-sub-header').forEach((h) => {
       const sm = h.textContent.match(/Reihe\s*(\S+)\s*\|\s*Sitz\s*([^|]+)/i);
       if (sm) addSeats(sm[1], sm[2].split(',').map((n) => n.trim()).filter(Boolean));
     });
-    // Seat step: UCI's cart stays empty until Weiter ("Es befindet sich noch
-    // nichts in Ihrem Warenkorb" with two seats picked, seen live), so the
-    // count and total come from the ticket picker and the seats from the
-    // seat map's own models.
+    // Seat step: UCI's cart stays empty until Weiter, even with seats
+    // picked, so the count and total come from the ticket picker and the
+    // seats from the seat map's own models.
     if (action.step === 'seats') {
       rows.clear();
       const b = getBook();
@@ -1480,9 +1376,9 @@
   panel.id = 'uci-batch';
   panel.innerHTML = `
     <style>
-      /* font-size must be set on its own: the shorthand "font: 14px/1.5 inherit"
-         is invalid (inherit is not a legal family), so Chrome dropped the whole
-         declaration and the page's ~20px body type leaked into every label. */
+      /* font-size is set on its own: the shorthand "font: 14px/1.5 inherit"
+         is invalid (inherit isn't a legal family), so the browser would drop
+         it and the page's ~20px body text would leak into every label. */
       #uci-batch{color:#fff;font-size:14px;line-height:1.5;margin:0 0 8px;max-width:620px;
         accent-color:#fff101}
       #uci-batch .basket{font-size:13px;color:#cfd6e0;background:rgba(255,255,255,.06);
@@ -1496,10 +1392,9 @@
       #uci-batch .pname{font-weight:600;font-size:14px}
       #uci-batch .pcode{font-size:11px;color:#7c8899;font-family:ui-monospace,monospace;
         letter-spacing:.3px;margin-right:auto}
-      /* Always visible but quiet — it used to be opacity:0 until hover,
-         which on touch devices (no hover) meant an invisible but tappable
-         delete. Two-step: first click arms it ("löschen?"), second
-         deletes, see renderList(). */
+      /* Always visible but quiet, since touch devices have no hover to
+         reveal it. Two-step: the first click arms it ("löschen?"), the
+         second deletes (see renderList()). */
       #uci-batch .del{cursor:pointer;color:#7c8899;font-size:15px;line-height:1;
         opacity:.45;transition:opacity .12s;padding:0 4px}
       #uci-batch .person:hover .del{opacity:1}
@@ -1528,12 +1423,8 @@
       #uci-batch .prog span:first-child{color:#cfd6e0;margin-right:12px}
       #uci-batch .hint{font-size:12px;color:#ffd77f;min-height:1em;margin-top:6px}
       #uci-batch .hint:empty{min-height:0}
-      /* No code ever adds an 'on' class to this box (checked: no
-         classList.add/toggle('on', ...) targets #uci-log anywhere), so the
-         old display:none/.log.on pair left this permanently hidden —
-         ui.log()/rep.log() were writing retry and error detail into a box
-         nothing could ever reveal. :empty is what actually keeps it out of
-         the way pre-run, matching .badge:empty/.detail:empty below. */
+      /* Hidden only while empty, like .badge and .detail above, so it
+         appears as soon as a run logs anything. */
       #uci-batch .log{margin-top:8px;max-height:140px;overflow:auto;
         font-size:11px;line-height:1.45;font-family:ui-monospace,monospace;
         background:rgba(0,0,0,.28);border-radius:5px;padding:7px}
@@ -1817,15 +1708,10 @@
   }
 
   let mounted = false;
-  // Fully custom UI, but every click proxies through to the real native
-  // button (hidden, not removed) rather than reimplementing pricing or
-  // combo-ticket eligibility ourselves — a MutationObserver on the native
-  // container keeps this in sync with whatever it does in response,
-  // synchronous or not, without guessing at timing.
-  // Shortens recurring verbose patterns rather than special-casing one
-  // label — "Fam-Tarif: Kind (unter 12 J)" becomes "Fam. Kind (u. 12J)",
-  // short enough to fit one line like the others. General regex rules so
-  // this also helps if another cinema phrases things similarly.
+  // Shortens verbose ticket labels by general pattern rather than per
+  // label, so other cinemas' similar wording is covered too: "Fam-Tarif:
+  // Kind (unter 12 J)" becomes "Fam. Kind (u. 12J)", short enough for one
+  // line like the others.
   function shortenTicketLabel(label) {
     return label
       .replace(/^Fam-Tarif:\s*/i, 'Fam. ')
@@ -1848,15 +1734,16 @@
     });
   }
 
+  // The ticket picker is fully custom, but every click is forwarded to the
+  // real (hidden) native button instead of reimplementing pricing or
+  // combo-ticket rules, and a MutationObserver on the native container
+  // re-renders it from whatever the site does in response.
   function renderTicketPanel(container, panel) {
     const rows = ticketRows(container);
     if (!rows.length) {
-      // The native container exists but has no .ticket-type-row children
-      // right now — almost certainly mid-recalculation on the site's own
-      // side (we already know it wholesale-replaces this area on other
-      // changes), not genuinely empty. Overwriting the panel here would
-      // blank it out for however long that gap lasts; leaving the last
-      // good render in place until real rows come back avoids that.
+      // No .ticket-type-row children right now: the site is most likely
+      // in the middle of replacing this area, not genuinely empty. Keep
+      // the last good render instead of blanking the panel.
       console.warn(TAG, 'ticket container has zero rows right now — skipping render, keeping last state');
       return;
     }
@@ -1885,25 +1772,17 @@
     });
   }
 
-  // The site appears to replace #ticket-type-container wholesale on every
-  // quantity change rather than mutating it — that's what caused the
-  // flicker back to the native UI: an inline display:none on the old node
-  // doesn't carry over to its replacement, and a MutationObserver bound to
-  // that old node silently stops firing once it's detached. Hiding is now
-  // a stylesheet rule (re-applies to any element with that id regardless
-  // of node identity), the panel re-anchors itself next to whatever the
-  // current container is on every check, and the observer watches a
-  // stable ancestor instead of the container itself.
+  // The site replaces #ticket-type-container wholesale on every quantity
+  // change. Neither an inline style nor an observer bound to the old node
+  // carries over to the new one, so the native picker is hidden by a
+  // stylesheet rule, the panel re-anchors next to the current container on
+  // every check, and the observer watches a stable ancestor instead.
   let ticketObserver = null;
 
-  // The site has one .tab-pane.section-pane per seat price category (PK1/
-  // PK2/PK3/PK1 LOGE), each with its OWN #ticket-type-container — same id,
-  // repeated, which is invalid HTML but browsers don't enforce uniqueness.
-  // A plain querySelector always grabs the first one in document order,
-  // regardless of which pane is actually visible — which is why the panel
-  // would vanish the moment a seat got selected in a different price
-  // category: it stayed anchored to whichever copy happened to be first,
-  // not the one that was still on screen.
+  // There's one .tab-pane.section-pane per seat price category (PK1/PK2/
+  // PK3/PK1 LOGE), each with its own #ticket-type-container: the same id,
+  // repeated. A plain querySelector returns the first one in document
+  // order, not the visible one, so this looks inside the shown pane.
   function findActiveTicketContainer() {
     const panes = document.querySelectorAll('.tab-pane.section-pane');
     for (const pane of panes) {
@@ -1924,12 +1803,10 @@
     if (!panel) panel = document.createElement('div');
     panel.id = 'uci-tickets';
 
-    // Disconnected before ANY of our own DOM writes below — both
-    // re-anchoring the panel next to the active pane's container and
-    // rewriting its contents are mutations inside the subtree the
-    // observer watches. Without this, our own writes retrigger the
-    // observer, which calls this function again. That was a genuine
-    // infinite loop before, not a hypothetical one.
+    // Disconnected before any of our own DOM writes below: re-anchoring
+    // the panel and rewriting its contents both happen inside the observed
+    // subtree, and would otherwise retrigger the observer and re-enter this
+    // function in an endless loop.
     if (ticketObserver) ticketObserver.disconnect();
     if (panel.previousElementSibling !== container || !panel.isConnected) {
       container.insertAdjacentElement('afterend', panel);
@@ -1947,11 +1824,9 @@
     return true;
   }
 
-  // No floating fallback: the payment step (HOST_SEL) doesn't exist yet
-  // while seats are still being picked, and showing this panel loose on
-  // top of the page at that point is more confusing than useful — it's
-  // only relevant once checkout is reached. Leaving mounted false here
-  // just means poll() below calls tryMount() again next tick.
+  // Mounts only into the payment step (HOST_SEL), with no floating
+  // fallback: the panel means nothing while seats are still being picked.
+  // Until the host exists, poll() retries every tick.
   function tryMount() {
     if (mounted || scriptOff) return;
     const host = document.querySelector(HOST_SEL);
@@ -2145,8 +2020,8 @@
         annotations: { consequentialHint: true },
         run: async ({ names }) => {
           if (scriptOff) throw new Error('better-uci is switched off on this page.');
-          // Not `mounted`: the panel mounts into the payment section while
-          // it's still hidden, on the seat step already (seen live).
+          // Not `mounted` alone: the panel already mounts into the hidden
+          // payment section while the seat step is showing.
           if (stepAction()?.step !== 'payment' || !mounted)
             throw new Error('Not on the payment step yet. The user has to pick seats and continue first.');
           if (running) throw new Error('A redemption is already running.');
@@ -2191,27 +2066,21 @@
     tryMount();
     registerBookingTools();
 
-    // The poll() loop below only ticks every 1.5s, and it's shared with
-    // several unrelated concerns (card list, basket sync) that don't need
-    // to react any faster than that. Reusing it for the ticket-type
-    // selector meant up to 1.5s of pure waiting after its native
-    // counterpart actually appeared before this script even noticed. Same
-    // fast-then-slow idiom as initBrowse's .movies-grid polling further
-    // down: check much more often at first, then stop once it has mounted
-    // at least once (poll() below keeps calling it too, as a slower
-    // fallback, in case it takes longer than this gives up on).
+    // The ticket picker gets a fast poll of its own at first: poll() only
+    // ticks every 1.5s, which could leave the seat step without a picker
+    // for that long. This checks every 150ms until it has mounted (or ~4.5s
+    // have passed); poll() keeps calling mountTicketSelector as the slower
+    // fallback. Same fast-then-slow idea as initBrowse's mount polling.
     let earlyMountTries = 0;
     const earlyMountPoll = setInterval(() => {
       if (!document.getElementById('uci-tickets')) mountTicketSelector();
       if (document.getElementById('uci-tickets') || ++earlyMountTries > 30) clearInterval(earlyMountPoll);
     }, 150);
 
-    // Every step runs isolated, and the next tick is scheduled first.
-    // Before 3.1.7 a single throw ended this loop for good. On iPhone that
-    // happened on the very first tick (GM_getValue in
-    // wirePaymentMethodMemory), so nothing after it ran again: no card list,
-    // and "Warenkorb wird gelesen…" forever. Errors now show once in the
-    // panel's log as well, since a phone has no console to check.
+    // Each step runs isolated, and the next tick is scheduled before any of
+    // them, so one throwing step can't stop the loop or the steps after it.
+    // Each distinct error is also logged once in the panel, since a phone
+    // has no console.
     const reported = new Set();
     const step = (name, fn) => {
       try { return fn(); } catch (err) {
@@ -2311,8 +2180,8 @@
     if (!btn) {
       const style = document.createElement('style');
       style.textContent = `
-        /* text-transform: the site's button CSS uppercased it ("BETTER-UCI:
-           AN", seen live), which read like a main action, not a utility. */
+        /* text-transform: the site's button CSS would uppercase it
+           ("BETTER-UCI: AN"), which reads like a main action, not a utility. */
         #uci-off-toggle{position:fixed;top:4px;left:50%;transform:translateX(-50%);z-index:2147483647;
           min-height:0 !important;height:auto;margin:0;padding:1px 8px;border-radius:10px;
           border:1px solid rgba(255,255,255,.14);background:transparent;color:#6b7684;
@@ -2343,14 +2212,10 @@
     const TAG = '[uci-browse]';
     console.log(TAG, 'loaded', location.href);
 
-    // At true document-start, document.head may not exist yet — <html>
-    // itself is the only thing guaranteed present almost immediately, so
-    // this falls back to appending there rather than waiting on <head>.
-    // Runs before mount() has had any chance to execute, and applies the
-    // instant a matching element exists in the DOM — independent of JS
-    // timing entirely, unlike the mount()-based hiding below. This is what
-    // actually prevents the native page from flashing before our panel is
-    // ready, rather than just reacting to it after the fact.
+    // Hides the native programme before it can flash. Injected at
+    // document-start, into <html> if <head> doesn't exist yet, so it
+    // applies the moment a matching element is parsed, independent of when
+    // mount() gets to run.
     (function hideEarly() {
       if (!document.documentElement) { setTimeout(hideEarly, 0); return; }
       const earlyStyle = document.createElement('style');
@@ -2444,14 +2309,7 @@
     }
 
     // -------------------------------------------------------------- parsing
-    // A showtime link carries the performance and site ids in one of two
-    // shapes. Until early October 2026 it was a path
-    // (…/performanceId/<id>/siteId/<n>); since then UCI links straight to
-    // the booking page (https://buchung.uci-kinowelt.de/?perf_id=<id>&site_id=<n>).
-    // Only the old shape was matched, so every showtime was dropped, every
-    // film with it, and the page said "Kein Programm gefunden". Both are
-    // read, in case UCI switches back or serves the old markup from a cache.
-    // /film/<slug>/<id>[/<cinema>/<n>] — the same id on the programme page
+    // /film/<slug>/<id>[/<cinema>/<n>]: the same id on the programme page
     // and on /coming-soon, which is how the two are joined (titles differ
     // between them, e.g. shortened).
     function filmIdOf(href) {
@@ -2459,6 +2317,11 @@
       return m ? m[1] : null;
     }
 
+    // A showtime link carries the performance and site ids in one of two
+    // shapes: a path (…/performanceId/<id>/siteId/<n>), or, since October
+    // 2026, a direct booking link
+    // (https://buchung.uci-kinowelt.de/?perf_id=<id>&site_id=<n>). Both are
+    // read, in case UCI switches back or a cache serves the old markup.
     function performanceIds(href) {
       const path = href.match(/performanceId\/([^/?#]+)\/siteId\/(\d+)/);
       if (path) return { perfId: path[1], siteId: path[2] };
@@ -2478,8 +2341,7 @@
       if (!title) return null;
 
       // The first item is either UCI's "Neu" label (an .event-label) or
-      // "N. Spielwoche". "Neu" used to fall through into the genre, so the
-      // meta line read "117min · Neu, Drama, …".
+      // "N. Spielwoche"; neither belongs in the genre.
       let runtime = null, genre = null, isNew = false;
       card.querySelectorAll('.film-info li').forEach((li) => {
         const t = li.textContent.trim();
@@ -2543,12 +2405,11 @@
       return { title, runtime, genre, fsk, poster, href, filmId: filmIdOf(href), isNew, showtimes };
     }
 
-    // The native page can carry the same film in more than one container
-    // (confirmed: ALWAYS LALISA appeared twice, in two sibling d-none
-    // wrappers, with identical performanceIds) — which rendered as two
-    // identical rows in "Weitere". Merged by title, the same key
-    // expandedFilms/matchesQuery already treat as unique, with showtimes
-    // deduped by perfId so a partial overlap still keeps every showing.
+    // The native page can list the same film in more than one container
+    // (e.g. two sibling d-none wrappers with identical performance ids).
+    // Films are merged by title, the key expandedFilms and matchesQuery
+    // already treat as unique, with showtimes deduped by perfId so a
+    // partial overlap still keeps every showing.
     function collectFilms(root) {
       const byTitle = new Map();
       [...(root || document).querySelectorAll('.film-container-wrapper')]
@@ -2567,9 +2428,9 @@
     }
 
     // New this week. UCI's "Neu" label covers a film's whole first week,
-    // but also every film that hasn't started yet, months ahead (on
-    // 2026-10-05 in Hamburg Mundsburg: 34 "Neu" films, 21 of them starting
-    // after the 8-day window). So a film counts only if it's "Neu" and
+    // but also every film that hasn't started yet, months ahead (often the
+    // majority of "Neu" films start after the 8-day window). So a film
+    // counts only if it's "Neu" and
     // plays within the window. German releases start on Thursdays: a film
     // whose first remaining showing comes before the next Thursday is in
     // its first week already ("Neu"), one starting later opens this week
@@ -2596,15 +2457,13 @@
     const EVENT_CODES = new Set(['289', '619']);
 
     // Screening-level kinds: they describe one showing, not the film.
-    // Measured on 2026-10-05 in Hamburg Mundsburg: Women's Night (60) on 3
-    // of Der perfekte Urlaub's 104 showings, Midnight Movie (503, UCI's
-    // badge text "Midnight Movie präsentiert") on 4 of Hope's 22, previews
-    // on the dates before a film's official start. So they mark the chip;
-    // only when every showing of a film has one does it become a film
-    // badge and row edge too (A Quiet House: Midnight Movie 3 of 3).
-    // In priority order: a chip with several gets the first one's color,
-    // and labels in this order. Preview last: the 21.10. Women's Night is
-    // also a preview, and "Women's" says more about it.
+    // Women's Night (code 60) and Midnight Movie (503) are usually a few
+    // showings of a longer run, previews the dates before a film's official
+    // start. So they mark the chip, and only when every showing of a film
+    // has one does it become a film badge and row edge too.
+    // In priority order: a chip with several gets the first one's color
+    // and lists them in this order. Preview comes last, since a Women's
+    // Night that is also a preview is better described as Women's Night.
     const SCREENING_KINDS = [
       { kind: 'womens', chip: 'Women’s', badge: 'Women’s Night', tip: 'Women’s Night',
         test: (s) => s.codes.includes('60') },
@@ -2630,9 +2489,8 @@
     function chipMarkup(s, label, tip = label, extraClass = '') {
       const tags = [...s.formats];
       if (s.special) tags.push(s.special);
-      // Screening kinds lead the sub-line: at 60px it truncates, and they
-      // matter more than the format (was "iSense · Previe…" on a Women's
-      // Night).
+      // Screening kinds lead the sub-line: it truncates at 60px, and they
+      // matter more than the format.
       const kinds = SCREENING_KINDS.filter((k) => s.kinds.includes(k.kind));
       const sub = [...kinds.map((k) => k.chip), s.lang, ...tags].filter(Boolean);
       const kindClass = kinds.length ? ' chip--' + kinds[0].kind : '';
@@ -2682,17 +2540,17 @@
     }
 
     // Single source of truth for "does this film have anything to show on
-    // this date" — used by both rowHTML and the count/empty-tab logic in
-    // render(), which previously ignored Nur OV and so overcounted.
+    // this date", Nur OV included: used by rowHTML and by the count and
+    // empty-tab logic in render(), so they can't disagree.
     function showtimesOn(film, dateStr) {
       return film.showtimes
         .filter((s) => s.date === dateStr)
         .filter((s) => !prefs.ovOnly || isOriginalLanguage(s.lang));
     }
 
-    // Title as a tooltip too — the compact row truncates with an ellipsis,
-    // and some titles only differ at the end (two "BTS WORLD TOUR
-    // 'ARIRANG' IN …" live viewings looked identical).
+    // Title as a tooltip too: the compact row truncates with an ellipsis,
+    // and some titles only differ at the end (e.g. "BTS WORLD TOUR
+    // 'ARIRANG' IN …" live viewings in different cities).
     function titleHTML(title) {
       return `<div class="film-title" title="${title.replace(/"/g, '&quot;')}">${title}</div>`;
     }
@@ -2730,7 +2588,7 @@
     // Poster + title + meta, linked to the film's own page when known.
     // Shared by every row type. .ub-info, not .film-info: UCI's own
     // stylesheet styles .film-info (dark box, padding, rounded corners),
-    // which leaked onto ours as an unintended box-in-a-box.
+    // which would otherwise apply to ours too.
     function filmHeadHTML(f, meta) {
       const inner = `
           ${f.poster ? `<img class="film-thumb" src="${f.poster}" loading="lazy" alt="">` : '<div class="film-thumb film-thumb--empty"></div>'}
@@ -2749,8 +2607,8 @@
     // single row in "Weitere" into a ~350px wall of chips.
     const extraChipLimit = () => (isNarrow() ? 6 : 12);   // phone: 2 lines of 3
 
-    // Day tab row: just that day's showtimes. No "+N diese Woche" any
-    // more — the Woche tab now covers "when else does this play?".
+    // Day tab row: just that day's showtimes. The Woche tab answers "when
+    // else does this play?".
     function rowHTML(film, dateStr) {
       const shown = showtimesOn(film, dateStr)
         .sort((a, b) => a.time.localeCompare(b.time));
@@ -2847,13 +2705,10 @@
         </div>`;
     }
 
-    // "Weitere" used to be one collapsible section per exact date, which
-    // turned into a very long scroll once far-future pre-sale events
-    // (sometimes a year-plus out) were involved, and split any film with
-    // several upcoming dates into a separate row under each one. Grouping
-    // by three coarse time horizons instead — with one row per film,
-    // showing all its dates as chips — keeps the outline short regardless
-    // of how far out the data goes, and keeps a film's whole run together.
+    // Weitere: showings beyond the 8-day window, grouped into three coarse
+    // time horizons with one row per film and all its dates as chips. That
+    // keeps the outline short however far out pre-sales go (sometimes over
+    // a year) and keeps a film's whole run in one row.
     function extraDatesHTML(films, knownDates) {
       const today = new Date(); today.setHours(0, 0, 0, 0);
       const in30Days = new Date(today); in30Days.setDate(in30Days.getDate() + 30);
@@ -2940,14 +2795,10 @@
         .sort((a, b) => a.dateSort.localeCompare(b.dateSort));
     }
 
-    // The whole row used to be one <a>, which is why the text came out
-    // yellow — UCI's own stylesheet colors bare <a> tags gold, and nothing
-    // here declared its own color, so it inherited that. Only the
-    // poster+title needs to be a link; keeping the row itself a plain div
-    // fixes the color at its source rather than overriding it after the
-    // fact. The action slot is either a real "Buchen" button (bookable) or
-    // a muted, clearly non-interactive date badge — not the same style
-    // wearing different text.
+    // Only poster+title is a link (via filmHeadHTML); the row is a plain
+    // div, since UCI's stylesheet colors bare <a> text gold. The action
+    // slot is a real "Buchen" button when bookable, otherwise a muted,
+    // clearly inert badge.
     function comingSoonRowHTML(f) {
       const dateText = f.dateLabel ? `Ab ${f.dateLabel}` : 'Bereits im Kino';
       const action = f.bookable
@@ -2967,9 +2818,9 @@
       demnaechstState = 'loading';
       render();
       try {
-        // UCI's server answers /coming-soon with an intermittent 502/503
-        // "Störung" page (seen 2026-10-05: one failure, then 200 on the very
-        // next request), so a failed load is retried a couple of times.
+        // UCI's server intermittently answers /coming-soon with a 502/503
+        // "Störung" page that's usually gone on the next request, so a
+        // failed load is retried twice.
         let res;
         for (let attempt = 0; ; attempt++) {
           res = await fetch('/coming-soon');
@@ -3045,11 +2896,10 @@
       const sel = panel.dataset.selected;
 
       const extraHTML = extraDatesHTML(visibleFilms, knownDates);
-      // Whether the Weitere tab exists at all is decided from the full,
-      // unfiltered programme — not from extraHTML, which is search- and
-      // OV-filtered. Otherwise typing a query with no far-future match
-      // removed the tab mid-search, shifting Demnächst left under the
-      // cursor (confirmed: a click aimed at Weitere opened Demnächst).
+      // Whether the Weitere tab exists is decided from the full, unfiltered
+      // programme, not from the search- and OV-filtered extraHTML.
+      // Otherwise a search could remove the tab mid-typing and shift
+      // Demnächst under the cursor.
       const hasExtra = films.some((f) => f.showtimes.some((s) => !knownDates.has(s.date)));
       // Dimmed, not hidden or disabled: the last day or two of the window
       // is often still unpublished, and a tab that's visibly empty saves a
@@ -3114,16 +2964,13 @@
         ${shownCount !== null ? `<div class="ub-count">${shownCount} Film${shownCount === 1 ? '' : 'e'}</div>` : ''}
         <div class="ub-list">${body || `<div class="ub-empty">${emptyMsg}</div>`}</div>
         <div class="ub-foot"><span id="ub-native-toggle">Original-Ansicht zeigen</span></div>`;
-      // Lives on the panel itself, not on
-      // .ub-search-row — the trigger button now sits in .ub-bar, a sibling
-      // of that row rather than a descendant, so a class scoped to the row
-      // alone couldn't reach it.
+      // On the panel, not .ub-search-row: the toggle button sits in .ub-bar,
+      // a sibling of the row, so only a class on their common ancestor can
+      // style both.
       panel.classList.toggle('ub-search-open', searchOpen || !!searchQuery.trim());
-      // Drives the desktop ✕ (see CSS) — Chrome's own type=search cancel
-      // button is hidden because it only fires when the field already has
-      // focus at mousedown, and every render() replaces the input with an
-      // unfocused one: confirmed via event logging, a first click on it
-      // produced mousedown/mouseup/click and no input event at all.
+      // Drives the custom ✕ (see CSS). Chrome's own type=search cancel
+      // button only works if the field already has focus at mousedown, and
+      // every render() replaces the input with an unfocused one.
       panel.classList.toggle('ub-has-query', !!searchQuery);
 
       const tabStrip = panel.querySelector('.ub-tabs');
@@ -3193,12 +3040,9 @@
     }
     let remeasured = false;
 
-    // "Original-Ansicht zeigen" used to clear only the grid's inline style,
-    // which the !important early CSS still overrode, and enforceHidden()
-    // re-hid it within a second anyway, so the button did nothing visible.
-    // Now the html.ub-native class switches off the early CSS, the
-    // matching rules in STYLE and enforceHidden(), and every element we
-    // hid is shown again.
+    // "Original-Ansicht zeigen": the html.ub-native class switches off the
+    // early CSS, the matching rules in STYLE and enforceHidden(), and every
+    // element we hid is shown again.
     const nativeShown = () => document.documentElement.classList.contains('ub-native');
     function setNativeVisible(on) {
       document.documentElement.classList.toggle('ub-native', on);
@@ -3230,9 +3074,8 @@
       #uci-browse .ub-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
         border-bottom:1px solid rgba(255,255,255,.1);padding-bottom:10px;margin-bottom:8px}
       #uci-browse .ub-tabs{display:flex;gap:4px;flex-wrap:wrap;flex:1}
-      /* 8px side padding, not 10: with the Woche tab added, 10px pushed
-         the 11 tabs to 814px, past the room left beside the checkbox(es)
-         in the 960px panel, wrapping Demnächst onto a 2nd row. */
+      /* 8px side padding keeps all 11 tabs on one row beside the checkboxes
+         in the 960px panel; at 10px Demnächst wraps onto a second row. */
       #uci-browse .ub-tab{background:rgba(255,255,255,.06);border:1px solid transparent;
         color:#cfd6e0;border-radius:6px;padding:5px 8px;font-size:12.5px;cursor:pointer}
       #uci-browse .ub-tab:hover{background:rgba(255,255,255,.12)}
@@ -3240,23 +3083,17 @@
       #uci-browse .ub-tab--empty:not(.active){color:#5c6673;background:rgba(255,255,255,.03)}
       #uci-browse .ub-ov{display:flex;align-items:center;gap:6px;font-size:12.5px;
         color:#cfd6e0;white-space:nowrap;accent-color:#fff101}
-      /* Stacked on desktop: side by side, a second checkbox pushed the tab
+      /* Stacked on desktop: side by side, the checkboxes would push the tab
          row past the panel width (see .ub-tab padding above). */
       #uci-browse .ub-toggles{display:flex;flex-direction:column;gap:2px}
       @media (max-width: 640px) {
         #uci-browse .ub-toggles{flex-direction:row;gap:14px}
       }
 
-      /* Confirmed via a real screenshot: below this width the two .ub-ov
-         checkboxes don't wrap onto their own clean line — they land
-         wherever .ub-tabs' own internal wrapping happened to leave
-         leftover space that row, i.e. visually stuck mid-grid next to
-         whichever date tabs half-filled a line. */
       @media (max-width: 640px) {
-        /* .ub-tabs is a single flex item in .ub-bar (it does its own
-           wrapping internally) — forcing it to claim a full line itself
-           means whatever comes after it in the flex-wrap flow starts
-           fresh on the next line instead of sharing a row with it. */
+        /* .ub-tabs claims a full line of .ub-bar, so the checkboxes after
+           it start on a clean line of their own instead of filling
+           leftover space next to the tabs. */
         #uci-browse .ub-tabs { flex: 1 1 100%; }
         /* One swipeable row instead of three wrapped ones (measured: the
            11 tabs took 3 rows / 149px before the first film at 386px). */
@@ -3272,8 +3109,8 @@
         padding:7px 10px}
       #uci-browse #ub-search::placeholder{color:#6b7684}
       #uci-browse #ub-search:focus{outline:none;border-color:rgba(255,241,1,.5)}
-      /* Native cancel button replaced by .ub-search-close — see the
-         .ub-has-query toggle in render() for why it never worked here. */
+      /* Native cancel button replaced by .ub-search-close; see the
+         .ub-has-query toggle in render() for why. */
       #uci-browse #ub-search::-webkit-search-cancel-button{-webkit-appearance:none;display:none}
       /* Hidden by default — desktop keeps the plain always-visible input
          with no icon and nothing to toggle; the ✕ only appears once
@@ -3311,9 +3148,9 @@
       #uci-browse .ub-count{font-size:11.5px;color:#8b97a8;margin-bottom:6px}
       #uci-browse .ub-list{display:flex;flex-direction:column}
       /* Top-aligned, not centered: expanding "+N weitere" grows the chips
-         downward, and a centered row slid the poster/title down with it.
-         .film-chips' min-height (= the compact thumb) + align-content
-         keeps a single chip line centered on the poster exactly as before. */
+         downward, and a centered row would slide the poster and title down
+         with it. .film-chips' min-height (= the thumbnail height) plus
+         align-content keeps a single chip line centered on the poster. */
       #uci-browse .film-row{display:flex;align-items:flex-start;gap:12px;padding:8px 2px;
         border-bottom:1px solid rgba(255,255,255,.07)}
       #uci-browse .film-row:hover{background:rgba(255,255,255,.03)}
@@ -3326,18 +3163,18 @@
         min-width:0;color:inherit;text-decoration:none}
       #uci-browse a.ub-film-link:hover .film-title{text-decoration:underline}
       #uci-browse .ub-info{flex:0 0 auto;width:220px;min-width:0}
-      /* Two lines, then ellipsis — a single nowrap line made titles that
-         only differ at the end ("BTS WORLD TOUR 'ARIRANG' IN BUENOS AIRES"
-         vs "… IN SÃO PAULO") render identically. Two lines still fit
-         beside the 57px compact thumbnail along with .film-meta. */
+      /* Two lines, then ellipsis: on a single line, titles that only
+         differ at the end ("BTS WORLD TOUR 'ARIRANG' IN BUENOS AIRES" vs
+         "… IN SÃO PAULO") look identical. Two lines plus .film-meta still
+         fit beside the 57px thumbnail. */
       #uci-browse .film-title{font-weight:600;font-size:13.5px;line-height:1.3;
         overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
       /* Colored row edge (see rowAccent()): yellow for new this week,
          purple for events, and a screening kind's own color (Preview blue,
          Midnight Movie red, Women's Night pink), each with a faint tint
          of the same color. The edge sits in the panel's own 14px side
-         padding (::before, not a border or row padding): inside the row it
-         pushed that row's poster and chips 7px right of every other row. */
+         padding (::before, not a border or row padding), so an accented
+         row's poster and chips stay in line with every other row. */
       #uci-browse .film-row.film-row--accent{position:relative;--accent:255,241,1;
         background:rgba(var(--accent),.035)}
       #uci-browse .film-row.film-row--event{--accent:180,120,230}
@@ -3367,9 +3204,9 @@
          (lang/format) line and shares one width, so a row reads as an even
          grid instead of "OmU · IMAX" chips towering over bare times.
          60px is the smallest that still fits every label at these fonts
-         (measured in a 390px viewport: "Sa 22:00" 49px, "OV · ScreenX"
-         52px of a 52px content box), so a 390px iPhone fits 4 pills plus
-         "+N weitere" per line (was 3 at 76x38). width and the 5px gap are
+         ("Sa 22:00" is 49px, "OV · ScreenX" exactly fills the 52px content
+         box), so a 390px iPhone fits 4 pills plus "+N weitere" per line.
+         The width and the 5px gap are
          mirrored in CHIP_W/CHIP_GAP (weekChipLimit). Weitere's date chips
          need 78px ("28.3.27 17:00"), hence their own wider .chip--date.
          Anything longer ellipsizes — the full text is in the tooltip. */
@@ -3430,13 +3267,11 @@
          with exactly those two children, so this is just flex-wrap. */
       @media (max-width: 640px) {
         #uci-browse .film-row { flex-wrap: wrap; }
-        /* flex-basis must be 0, not auto: with auto, a flex item's size
-           for the *wrapping decision* is its content's natural size —
-           and a long title's natural size is its full unwrapped text
-           width (the line clamp doesn't shrink that). Confirmed against a
-           real screenshot: short titles stayed on the poster's line, only
-           long ones broke onto their own. A 0 basis means the wrap
-           decision sees "small", then flex-grow:1 fills the line. */
+        /* flex-basis must be 0, not auto: with auto, the wrap decision uses
+           the content's natural size, which for a long title is its full
+           unwrapped width (the line clamp doesn't shrink it), so long
+           titles would break away from their poster. A 0 basis looks small
+           to the wrap decision, then flex-grow:1 fills the line. */
         #uci-browse .ub-film-link { flex: 1 1 0; }
         #uci-browse .ub-info { width: auto; flex: 1 1 0; min-width: 0; }
         #uci-browse .film-chips { flex: 1 1 100%; min-height: 0; }
@@ -3477,11 +3312,11 @@
          its own content either. */
       #uci-browse{width:100%;box-sizing:border-box}
 
-      /* The "Ihre Filme im UCI Kino …" heading sat ~100px left of the
-         panel: measured live, .cinema-select spans 1192px with 64px side
-         margins inside .container-standard while the panel is a centered
-         960px. Same width + centering lines them up; auto margins also
-         collapse to 0 on narrower screens, where both fill the container. */
+      /* Lines the "Ihre Filme im UCI Kino …" heading up with the panel:
+         natively .cinema-select spans the wider .container-standard (1192px,
+         64px side margins) while the panel is a centered 960px. Auto
+         margins collapse to 0 on narrower screens, where both fill the
+         container. */
       .container-standard > .cinema-select{max-width:960px;margin-left:auto !important;
         margin-right:auto !important}
 
@@ -3499,16 +3334,11 @@
          a small link in our own footer instead — see ub-foot below. */
       html:not(.ub-native) .switch-tabs{display:none !important}`;
 
-    // These two blocks have no unique classnames — only reusable Bootstrap
-    // utility combos that likely repeat elsewhere on the page — so they're
-    // found by their visible text at runtime instead of a hardcoded CSS
-    // selector, same technique used to identify them during diagnosis.
-    // Uses the SAME .closest() call that was used to identify each target
-    // during diagnosis — a fixed parentElement climb count is not the same
-    // operation and can silently land on the wrong ancestor. extraClimb
-    // steps past that match when the element itself collapses to 0 height
-    // once emptied, but its outer wrapper still reserves space via its own
-    // padding, independent of content.
+    // The view switcher and search box have no unique class names, only
+    // Bootstrap utility combinations that repeat elsewhere, so they're
+    // found by their visible text. closest(closestSelector) picks the
+    // wrapper; extraClimb steps further up when that wrapper collapses once
+    // emptied but its parent still reserves space with its own padding.
     // What tidyNativeChrome() hid, so the original view can show it again.
     const nativeHiddenEls = [];
     function hideByText(text, closestSelector, extraClimb = 0) {
@@ -3521,11 +3351,9 @@
     }
 
     function tidyNativeChrome() {
-      // View switcher (Poster-/Tages-/Vorstellungsansicht): controlled only
-      // how the native .movies-grid rendered, which we've already hidden —
-      // nothing left for it to do. The inner button-row div collapses on
-      // its own, but its outer wrapper carries ~52px of its own padding
-      // regardless — climb one further level to take that too.
+      // View switcher (Poster-/Tages-/Vorstellungsansicht): only controls
+      // the hidden native .movies-grid. One level further up than the
+      // button row, whose wrapper has ~52px of padding of its own.
       const sw = hideByText('Vorstellungsansicht', 'div[class]', 1);
       // Search box: filters the native grid, same as above.
       const q = document.querySelector('input[placeholder*="Filmtitel" i]');
@@ -3537,11 +3365,9 @@
       console.log(TAG, 'view-switcher hidden:', sw, '| search box hidden:', !!q);
     }
 
-    // Applied every poll tick, not just once at mount — if anything on the
-    // page re-renders these elements, or if a native stylesheet loaded
-    // later wins a specificity fight against our injected CSS, this
-    // re-asserts the fix directly via inline styles rather than silently
-    // going stale after the old one-shot mount window closed.
+    // Applied every poll tick, not only at mount, in case the page
+    // re-renders these elements or a later stylesheet overrides the
+    // injected CSS.
     function enforceHidden() {
       if (nativeShown()) return;
       const grid = document.querySelector('.movies-grid');
@@ -3553,9 +3379,8 @@
       const filters = document.querySelector('[data-schedule-filters-wrapper]');
       if (filters && filters.style.display !== 'none') filters.style.display = 'none';
 
-      // grid.parentElement's class combo is reused elsewhere on the page
-      // (confirmed earlier), so this stays keyed off the DOM relationship
-      // rather than a selector.
+      // grid.parentElement's class combination is reused elsewhere on the
+      // page, so it's found through the DOM relationship, not a selector.
       const outer = grid && grid.parentElement;
       if (outer && outer.style.getPropertyValue('padding-top') !== '0px') {
         // A plain assignment (outer.style.paddingTop = '0') loses to
@@ -3750,9 +3575,8 @@
       return true;
     }
 
-    // setInterval's first tick only fires after the full delay — mount()
-    // would otherwise never run at all during that first second, which is
-    // exactly the native-page flash this whole thing exists to prevent.
+    // Tried once right away, since setInterval's first tick only comes
+    // after the full delay.
     mount();
     narrowMQ.addEventListener('change', () => { if (panel.isConnected) render(); });
     // Pills per row follow the width (weekChipLimit), so a width change
