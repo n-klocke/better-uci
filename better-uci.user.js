@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         better-uci
 // @namespace    https://github.com/n-klocke/better-uci
-// @version      3.7.2
+// @version      3.7.3
 // @description  Batch-redeem UCI Unlimited cards on the booking page, and a denser, filterable programme browser on the kinoprogramm page.
 // @author       n-klocke
 // @license      MIT
@@ -1538,9 +1538,12 @@
       btn.title = 'Wählt die besten freien Plätze nebeneinander';
       btn.textContent = '★ Beste Plätze wählen';
       // Hovering outlines the pick on the map, as does the open panel.
+      // Mouse only: iOS Safari fires the hover events on a tap, and when
+      // they make something visible (the preview un-dims the seats) it
+      // takes the tap as a hover and never sends the click.
       const prefsOpen = () => !!document.getElementById('uci-best-prefs')?.open;
-      btn.addEventListener('pointerenter', () => previewBest(true));
-      btn.addEventListener('pointerleave', () => previewBest(prefsOpen()));
+      btn.addEventListener('pointerenter', (e) => { if (e.pointerType === 'mouse') previewBest(true); });
+      btn.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') previewBest(prefsOpen()); });
       btn.addEventListener('click', () => {
         previewBest(false);
         const map = document.getElementById('uci-seatmap');
