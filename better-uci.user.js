@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         better-uci
 // @namespace    https://github.com/n-klocke/better-uci
-// @version      3.9.1
+// @version      3.9.2
 // @description  Batch-redeem UCI Unlimited cards on the booking page, and a denser, filterable programme browser on the kinoprogramm page.
 // @author       n-klocke
 // @license      MIT
@@ -690,6 +690,8 @@
             .done((resp) => reply(m.id, { ok: true, result: resp }))
             .fail((xhr) => reply(m.id, { ok: false, status: xhr.status,
               body: xhr.responseJSON || null, text: xhr.responseText || '' }));
+        } else if (m.op === 'busy') {
+          reply(m.id, { ok: true, result: window.$ ? window.$.active : 0 });
         } else if (m.op === 'seatMap') {
           reply(m.id, { ok: true, result: seatMapOf(b) });
         } else if (m.op === 'seatPlan') {
@@ -845,7 +847,24 @@
       : Promise.reject({ status: m.status, responseJSON: m.body, responseText: m.text || '' })));
   }
 
-  function post(data, label, rep, prog) {
+  // Requests still running in the page's jQuery: UCI's own (the payment
+  // step's load sends one to this endpoint that takes 5-7s) and ours. The
+  // server refuses a request on a booking while another is still running,
+  // fast and with a B-RT34 code (C-05-1, C-160), so every post waits for
+  // the page to go quiet first. Confirmed 2026-10-07: a card check sent
+  // during the page's own request failed in 0.2s, the same check after it
+  // went through.
+  function pageBusy() {
+    const w = pageWin();
+    if (w && w.$) return w.$.active > 0;
+    return useBridge && pageBridge.sync({ op: 'busy' }) > 0;
+  }
+
+  async function post(data, label, rep, prog) {
+    if (pageBusy()) {
+      rep && rep.phase('wartet auf die Buchungsseite');
+      await waitFor(() => !pageBusy(), 30000);
+    }
     const t0 = performance.now();
     rep && rep.inflight(t0);
     console.log(TAG, '→', label, data);
@@ -921,10 +940,11 @@
             note: open ? `Karte für keinen der ${open} offenen Plätze erlaubt` : 'alle Plätze belegt' };
         }
 
-        // seatActionIdx is the row's bookingServerIndex, as in UCI's own
-        // form (displayTicketSelectionForDiscount), not its position in
-        // priceRows; the two can differ, and the server then applies the
-        // card to another ticket or refuses it (B-RT34 C-160).
+        // seatActionIdx is the server's index of the row. Rows from a
+        // server response are in that order, but book.priceRows (used for
+        // the own card) is reversed, and the page records the server's
+        // index on each row as bookingServerIndex, which UCI's own form
+        // sends (displayTicketSelectionForDiscount).
         const sidx = rows[idx].bookingServerIndex ?? idx;
         rep.phase('wird angewendet → ' + seatLabel(rows[idx]));
         const resp = await post(

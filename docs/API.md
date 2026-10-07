@@ -161,14 +161,23 @@ directly.
 Used by the voucher-redemption module. Not documented in detail here —
 see `better-uci.user.js` for its usage.
 
-- **`seatActionIdx` is `priceRows[].bookingServerIndex`, not the row's
-  array position** — confirmed 2026-10-07 from UCI's own `dist/main.js`
-  (`displayTicketSelectionForDiscount`, `applyUnlimitedCardToTicket`, the
-  ticket-voucher flow). Sending the array position failed for friends'
-  Unlimited cards with `B-RT34 C-160` ("Es können derzeit keine Buchungen
-  mit hinterlegter Kundenkarte durchgeführt werden."), while UCI's own
-  form worked. **OPEN:** an actual `priceRows` where the two differ hasn't
-  been captured yet.
+- **`seatActionIdx` is the row's index in the server's `priceRows`** —
+  confirmed 2026-10-07. Server responses carry no `bookingServerIndex`;
+  the page adds it when it copies them into `book.priceRows`, and stores
+  that array **reversed** (4 seats: positions 0–3 had `bookingServerIndex`
+  3, 2, 1, 0). UCI's own forms send `bookingServerIndex`. So: index into
+  a raw response by position, into `book.priceRows` by
+  `bookingServerIndex`.
+- **One request at a time per booking** — confirmed 2026-10-07. A request
+  sent while another on the same booking is still running is refused in
+  ~0.2s with `failure: "true"` and a `B-RT34` code: `C-05-1` ("Leider
+  haben wir ein Problem mit Ihrer Buchung", HTTP 311) or `C-160` ("Es
+  können derzeit keine Buchungen mit hinterlegter Kundenkarte durchgeführt
+  werden"). The payment step's own load sends one to this endpoint that
+  takes 5–7s, so anything fired right after the step appears collides
+  with it. All the page's calls go through its jQuery, so `$.active === 0`
+  means the booking is free.
+- Requests here are slow: 2.5–8.6s each, observed 2026-10-07.
 
 ## Seat map internals (`book.seatingApp`) — confirmed 2026-10-06
 
