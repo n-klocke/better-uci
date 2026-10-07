@@ -2483,9 +2483,10 @@
   }
 
   // ---------------------------------------------------------------- WebMCP
-  // Booking-page tools (see webmcp at the top). Seat choice, "Weiter" and
-  // payment stay with the user; the agent can read the booking and redeem
-  // Unlimited cards, your own and saved friends', on the payment step.
+  // Booking-page tools (see webmcp at the top). The agent can read the
+  // booking, set the ticket count and pick seats on the seat step, and
+  // redeem Unlimited cards, your own and saved friends', on the payment
+  // step. "Weiter" and payment stay with the user.
   const normName = (n) => String(n || '').normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase();
   const OWN_ALIASES = new Set(['ich', 'me', 'myself', 'self', 'own', 'mine']);
 
@@ -2496,6 +2497,39 @@
       return { name: p.name, own: !!p.own, card: mask(p.code),
         redeemed: !!applied, seat: applied ? seatLabel(applied) : null };
     });
+  }
+
+  // Ticket types on the seat step as an agent sees them, from the active
+  // price category's native picker. Empty off the seat step.
+  function ticketTypesForAgent() {
+    const c = stepAction()?.step === 'seats' && findActiveTicketContainer();
+    return c ? ticketRows(c).map((r) => ({ type: r.label, price: r.price, count: +r.count,
+      canAdd: !!r.plusBtn && !r.plusBtn.disabled })) : [];
+  }
+
+  // Presses the native +/− of one ticket type (looked up fresh each time,
+  // since UCI replaces the container on every change) until it shows
+  // `target`. Each press waits for the count to change, so UCI's own rules
+  // apply one step at a time. Returns the count it ended on.
+  async function setTicketTypeCount(label, target) {
+    const row = () => { const c = findActiveTicketContainer(); return c && ticketRows(c).find((r) => r.label === label); };
+    for (let step = 0; step < 40; step++) {
+      const r = row();
+      if (!r) throw new Error(`Ticket type "${label}" disappeared.`);
+      const now = +r.count;
+      if (now === target) return now;
+      const btn = now < target ? r.plusBtn : r.minusBtn;
+      if (!btn || btn.disabled) return now;
+      btn.click();
+      let moved = false;
+      for (let i = 0; i < 40 && !moved; i++) {
+        await sleep(150);
+        const after = row();
+        moved = !!after && +after.count !== now;
+      }
+      if (!moved) return now;
+    }
+    return +(row()?.count || 0);
   }
 
   async function loadSeatMap() {
@@ -2635,6 +2669,56 @@
             basket: b && { tickets: b.n, unlimited: b.unlimited, moviePoints: b.free,
               seatsToPay: b.open, amountDue: Math.round(b.due * 100) / 100, bookingFee: lastFee },
             canRedeemUnlimited: stepAction()?.step === 'payment' && !scriptOff && !!b && b.open > 0,
+            ticketTypes: ticketTypesForAgent(),
+          };
+        },
+      },
+      {
+        name: 'set_ticket_count',
+        title: 'Tickets wählen',
+        description: 'On the seat step, set how many tickets of each type to book, e.g. { "Erwachsener": 2 }. '
+          + 'Type names come from get_booking_state\'s ticketTypes; a unique start of a name is enough. '
+          + 'Types not given are left as they are; 0 removes a type. Runs through UCI\'s own ticket buttons, '
+          + 'so its rules apply (e.g. family adults only alongside a family child) and a count may end up lower '
+          + 'than asked. The ticket count is what pick_best_seats picks seats for. Nothing is booked or paid.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            counts: { type: 'object', additionalProperties: { type: 'integer', minimum: 0, maximum: 20 },
+              description: 'Ticket type name → number of tickets' },
+          },
+          required: ['counts'],
+        },
+        run: async ({ counts }) => {
+          if (scriptOff) throw new Error('better-uci is switched off on this page.');
+          if (stepAction()?.step !== 'seats') throw new Error('Not on the seat step.');
+          if (seatMapAuto) throw new Error('Seats are being picked right now.');
+          if (!counts || typeof counts !== 'object' || !Object.keys(counts).length)
+            throw new Error('counts must name at least one ticket type.');
+          const types = ticketTypesForAgent();
+          if (!types.length) throw new Error('The ticket picker has not loaded yet.');
+          const plan = [];
+          for (const [raw, want] of Object.entries(counts)) {
+            const n = Number(want);
+            if (!Number.isInteger(n) || n < 0 || n > 20) throw new Error(`Count for "${raw}" must be a whole number 0–20.`);
+            const q = normName(raw);
+            const exact = types.filter((t) => normName(t.type) === q);
+            const hits = exact.length ? exact : types.filter((t) => normName(t.type).startsWith(q));
+            if (!hits.length) throw new Error(`No ticket type "${raw}". Available: ${types.map((t) => t.type).join(', ')}.`);
+            if (hits.length > 1) throw new Error(`"${raw}" matches ${hits.map((t) => t.type).join(', ')}; be more specific.`);
+            plan.push({ type: hits[0].type, want: n });
+          }
+          // Removals first, so a lower total frees room under UCI's limits.
+          plan.sort((a, b) => (a.want - (types.find((t) => t.type === a.type).count))
+            - (b.want - (types.find((t) => t.type === b.type).count)));
+          const results = [];
+          for (const p of plan) results.push({ type: p.type, asked: p.want, now: await setTicketTypeCount(p.type, p.want) });
+          const short = results.filter((r) => r.now !== r.asked);
+          return {
+            results,
+            ticketTypes: ticketTypesForAgent(),
+            note: short.length ? 'UCI did not allow every count (see results); check ticketTypes.canAdd.'
+              : 'Done. Next: pick_best_seats, or the user picks seats.',
           };
         },
       },
@@ -2644,8 +2728,8 @@
         description: 'On the seat step, select the best free seats side by side for the chosen ticket count, '
           + 'the same as better-uci\'s "Beste Plätze" button: one row, one price category, scored by aisle, '
           + 'centre, target row and price. The weights default to the user\'s saved ones; any given here '
-          + 'apply to this call only. preview: true only reports the pick. The user chooses the ticket '
-          + 'count first. Selecting only holds seats in the basket; nothing is booked or paid.',
+          + 'apply to this call only. preview: true only reports the pick. Set the ticket count first '
+          + '(set_ticket_count, or the user). Selecting only holds seats in the basket; nothing is booked or paid.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -2664,7 +2748,7 @@
           mountSeatMap();
           const box = document.getElementById('uci-seatmap');
           if (!box || !seatMapPlan) throw new Error('The seat map has not loaded yet.');
-          if (!seatMapPlan.limit) throw new Error('No tickets chosen yet. The user picks the ticket count first.');
+          if (!seatMapPlan.limit) throw new Error('No tickets chosen yet. Set them with set_ticket_count first.');
           if (seatMapAuto) throw new Error('Seats are already being picked.');
           const prefs = Object.assign({}, seatPrefs);
           SEAT_PREF_ROWS.forEach(([key, , max]) => {
@@ -4222,8 +4306,8 @@
           name: 'open_booking',
           title: 'Buchung öffnen',
           description: 'Open the booking page for one showing (perfId and siteId from search_showtimes). '
-            + 'The tab navigates away; on the booking page the user picks seats, and the booking tools '
-            + '(get_booking_state, list_unlimited_cards, redeem_unlimited_cards) become available.',
+            + 'The tab navigates away; on the booking page the booking tools (get_booking_state, '
+            + 'set_ticket_count, pick_best_seats, list_unlimited_cards, redeem_unlimited_cards) become available.',
           inputSchema: {
             type: 'object',
             properties: { perfId: { type: 'string' }, siteId: { type: 'string' } },
@@ -4237,7 +4321,8 @@
               const url = bookingUrl(s);
               setTimeout(() => location.assign(url), 300);
               return { opening: url, film: f.title, showing: showingForAgent(s),
-                next: 'The user picks seats on the seat map and presses Weiter to reach the payment step.' };
+                next: 'Set tickets with set_ticket_count and seats with pick_best_seats (or the user picks them); '
+                  + 'the user presses Weiter to reach the payment step.' };
             }
             throw new Error('No showing with that perfId/siteId on this programme page.');
           },
