@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         better-uci
 // @namespace    https://github.com/n-klocke/better-uci
-// @version      3.7.1
+// @version      3.7.2
 // @description  Batch-redeem UCI Unlimited cards on the booking page, and a denser, filterable programme browser on the kinoprogramm page.
 // @author       n-klocke
 // @license      MIT
@@ -28,7 +28,7 @@
   // the script, every key is read into a cache once before init, which is
   // why the keys are listed up front.
   const STORE_KEYS = ['uci_cards_v1', 'uci_payment_method_v1', 'uci_browse_prefs_v1', 'uci_booking_off_v1',
-    'uci_seat_prefs_v1'];
+    'uci_seat_prefs_v2'];
   const store = (() => {
     const sync = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
     const gm4 = !sync && typeof GM === 'object' && GM !== null && typeof GM.getValue === 'function';

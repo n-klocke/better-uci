@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.7.2
+
+- iPhone: Beste Plätze settings weren't loaded after a reload (3.7.1 renamed
+  the storage key but not in the list Userscripts preloads).
+
 ## 3.7.1
 
 - New Beste Plätze defaults: Gangplatz 3, Mittig 6, Reihe einhalten 5,
