@@ -1,5 +1,17 @@
 # Changelog
 
+## 3.6.0
+
+- **★ Beste Plätze** on the seat map picks the best free seats side by
+  side for your ticket count, in one row and one price category. It
+  prefers, in this order: at the aisle, central, and about a third of the
+  way back from the screen (rows in front and behind count the same).
+  Hovering the button outlines what it would pick. It replaces your
+  current picks, one seat at a time through UCI's own seat handler.
+- It never leaves a single free seat next to the block. UCI moves such
+  picks itself, so these blocks are only used when nothing else fits.
+  Loveseat pairs aren't split, and wheelchair spaces are never picked.
+
 ## 3.5.0
 
 - **New seat map** on the seat step, drawn in place of UCI's canvas. Every

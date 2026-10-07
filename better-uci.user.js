@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         better-uci
 // @namespace    https://github.com/n-klocke/better-uci
-// @version      3.5.0
+// @version      3.6.0
 // @description  Batch-redeem UCI Unlimited cards on the booking page, and a denser, filterable programme browser on the kinoprogramm page.
 // @author       n-klocke
 // @license      MIT
@@ -631,7 +631,9 @@
         return { id: String(m.id), x: +a.x, y: +a.y, w: +a.width, h: +a.height, row: String(a.row),
           seat: String(a.seatNumber), type: +a.type, status: +a.status, section: m.getSectionId(),
           mine: m.isSelected(), pending: !!(a.markedForSelection || a.markedForRemoval),
-          left: String(a.neighborLeft || 0), right: String(a.neighborRight || 0) };
+          left: String(a.neighborLeft || 0), right: String(a.neighborRight || 0),
+          lu: String(a.neighborLeftUnlinked) === 'true', ru: String(a.neighborRightUnlinked) === 'true',
+          aisle: String(a.isAisleSeat) === 'true' };
       }),
     };
   }
@@ -1299,7 +1301,7 @@
   const SM_COLORS = ['#f472b6', '#a78bfa', '#60a5fa', '#22d3ee', '#34d399', '#fb923c', '#f87171'];
   const SM_WHEELCHAIR = '<g class="wc"><circle cx="12" cy="4.2" r="2.3"/>'
     + '<path d="M10.6 7.6v6h6.1l2.6 5.4"/><path d="M8.3 10.7a6 6 0 1 0 8.4 7.5"/></g>';
-  let seatMapSig = '', seatMapPlan = null, seatMapBusy = null, seatMapHintTimer = 0;
+  let seatMapSig = '', seatMapPlan = null, seatMapBusy = null, seatMapHintTimer = 0, seatMapAuto = false;
 
   function readSeatPlan() {
     const w = pageWin();
@@ -1336,6 +1338,18 @@
       #uci-seatmap .cnt { font-size: 12px; font-weight: 700; padding: 2px 10px; border-radius: 999px;
         background: rgba(255,255,255,.07); color: #cfd6e0; white-space: nowrap; }
       #uci-seatmap .cnt.full { background: #fff101; color: #000; }
+      #uci-seatmap .hdr { display: flex; align-items: center; gap: 8px; }
+      /* min-height/text-transform: the site's global button styles. */
+      #uci-seatmap .best { min-height: 0 !important; height: auto; margin: 0; border: 1px solid rgba(255,241,1,.45);
+        border-radius: 999px; padding: 2px 10px; background: rgba(255,241,1,.1); color: #fff101;
+        font: 700 12px/1.4 -apple-system, system-ui, sans-serif; letter-spacing: 0; text-transform: none !important;
+        cursor: pointer; white-space: nowrap; }
+      #uci-seatmap .best:hover { background: rgba(255,241,1,.2); }
+      #uci-seatmap.auto .best { opacity: .5; cursor: progress; }
+      #uci-seatmap.auto svg { cursor: progress; }
+      /* Preview of what Beste Plätze would pick, while hovering it. */
+      #uci-seatmap .st.pv .b { stroke: #fff101; stroke-width: 3; stroke-dasharray: 5 3; }
+      #uci-seatmap .st.pv .s { opacity: 1 !important; }
       #uci-seatmap .hint { position: absolute; left: 50%; top: 30px; transform: translate(-50%, -4px); z-index: 6;
         max-width: calc(100% - 24px); padding: 7px 12px; border-radius: 8px; background: #f2c94c; color: #1d1600;
         font-size: 12.5px; font-weight: 600; text-align: center; box-shadow: 0 6px 20px rgba(0,0,0,.45);
@@ -1411,7 +1425,9 @@
       injectSeatMapCSS();
       box = document.createElement('div');
       box.id = 'uci-seatmap';
-      box.innerHTML = '<div class="hd"><span class="ttl">Saalplan</span><span class="cnt"></span></div>'
+      box.innerHTML = '<div class="hd"><span class="ttl">Saalplan</span><span class="hdr">'
+        + '<button type="button" class="best" title="Wählt die besten freien Plätze nebeneinander">★ Beste Plätze</button>'
+        + '<span class="cnt"></span></span></div>'
         + '<div class="hint" role="status"></div><div class="scroll"></div><div class="lgd"></div><div class="tip" hidden></div>';
       container.insertBefore(box, document.getElementById('SeatingPlanComponentLayoutScreen') || container.firstChild);
       wireSeatMap(box);
@@ -1550,6 +1566,127 @@
     seatMapHintTimer = setTimeout(() => h.classList.remove('on'), 3500);
   }
 
+  // Beste Plätze: the best block of n free seats side by side in one row
+  // and one price category. Preferences, strongest first: at the aisle
+  // (UCI's isAisleSeat, true at every block end), central, then near the
+  // line one third back from the screen, rows in front of it and behind it
+  // weighing the same. Weighted rather than strictly in order: one seat
+  // further from the aisle costs as much as ~3 seats off-centre or 4 rows.
+  // UCI moves picks that would leave a single free seat next to them (seen
+  // live: picking H2 with H1 free selected H1 instead), so such blocks are
+  // only used when nothing else fits. Loveseat pairs aren't split, and
+  // wheelchair spaces are never picked. Your current seats count as free.
+  // Returns the seats in tap order: from the end that touches the aisle or
+  // a taken seat, so no half-picked state leaves a single gap either.
+  function bestSeatGroup(plan, n) {
+    if (!(n > 0)) return null;
+    const all = plan.seats;
+    const byId = new Map(all.map((t) => [t.id, t]));
+    const avail = (t) => !!t && t.type !== 3 && (t.status === 2 || t.mine);
+    const median = (a) => { const v = a.slice().sort((x, y) => x - y); return v.length ? v[v.length >> 1] : 0; };
+    const minX = Math.min(...all.map((t) => t.x)), maxX = Math.max(...all.map((t) => t.x + t.w));
+    const minY = Math.min(...all.map((t) => t.y)), maxY = Math.max(...all.map((t) => t.y + t.h));
+    const seatW = median(all.map((t) => t.w)) || 1;
+    const rowYs = [...new Set(all.filter((t) => t.type !== 3).map((t) => Math.round(t.y)))].sort((a, b) => a - b);
+    const rowPitch = median(rowYs.slice(1).map((y, i) => y - rowYs[i])) || seatW;
+    const cx = (minX + maxX) / 2, targetY = minY + (maxY - minY) / 3;
+
+    // Loveseat partners, paired left to right as the map draws them.
+    const partner = new Map();
+    all.filter((t) => t.type === 2).sort((a, b) => a.x - b.x).forEach((t) => {
+      const p = byId.get(t.right);
+      if (!partner.has(t.id) && p && p.type === 2 && !partner.has(p.id)) { partner.set(t.id, p.id); partner.set(p.id, t.id); }
+    });
+
+    // Blocks: chains of linked neighbours, left to right.
+    const right = (t) => { const r = !t.ru && byId.get(t.right); return r && !r.lu && r.left === t.id ? r : null; };
+    const hasLeft = (t) => { const l = !t.lu && byId.get(t.left); return !!(l && !l.ru && l.right === t.id); };
+    const blocks = [], seen = new Set();
+    all.filter((t) => !hasLeft(t)).forEach((start) => {
+      const b = [];
+      for (let t = start; t && !seen.has(t.id); t = right(t)) { seen.add(t.id); b.push(t); }
+      blocks.push(b);
+    });
+
+    let best = null, bestGap = null;
+    blocks.forEach((b) => {
+      const aisles = b.map((t, i) => (t.aisle ? i : -1)).filter((i) => i >= 0);
+      if (!aisles.length) aisles.push(0, b.length - 1);
+      for (let i = 0; i + n <= b.length; i++) {
+        const g = b.slice(i, i + n), end = i + n - 1;
+        if (!g.every(avail) || g.some((t) => t.section !== g[0].section)) continue;
+        if (g.some((t) => partner.has(t.id) && !g.some((u) => u.id === partner.get(t.id)))) continue;
+        let L = 0, R = 0;
+        for (let k = i - 1; k >= 0 && avail(b[k]); k--) L++;
+        for (let k = end + 1; k < b.length && avail(b[k]); k++) R++;
+        const aisleDist = Math.min(...aisles.map((a) => (a < i ? i - a : a > end ? a - end : 0)));
+        const gx = (g[0].x + g[n - 1].x + g[n - 1].w) / 2;
+        const gy = g.reduce((s, t) => s + t.y + t.h / 2, 0) / n;
+        const cost = aisleDist + 0.3 * Math.abs(gx - cx) / seatW + 0.25 * Math.abs(gy - targetY) / rowPitch;
+        const order = L === 0 || R !== 0 ? g : g.slice().reverse();
+        const cand = { seats: order, cost, row: g[0].row, section: g[0].section };
+        if (L === 1 || R === 1) { if (!bestGap || cost < bestGap.cost) bestGap = cand; }
+        else if (!best || cost < best.cost) best = cand;
+      }
+    });
+    return best || bestGap;
+  }
+
+  async function pickBestSeats(box) {
+    const plan = seatMapPlan;
+    if (!plan || seatMapAuto || seatMapBusy) return;
+    const n = plan.limit;
+    if (!n) { seatMapHint(box, 'Erst die Anzahl der Tickets wählen.'); return; }
+    const best = bestSeatGroup(plan, n);
+    if (!best) { seatMapHint(box, `Keine ${n} freien Plätze nebeneinander.`); return; }
+    const want = new Set(best.seats.map((t) => t.id));
+    const mineOf = (p) => (p ? p.seats.filter((t) => t.mine) : []);
+    const done = () => { const m = mineOf(readSeatPlan()); return m.length === n && m.every((t) => want.has(t.id)); };
+    if (done()) { seatMapHint(box, 'Das sind schon die besten Plätze.'); return; }
+    // One tap at a time, each waiting until UCI has locked or released
+    // and the selection has changed. UCI may move a pick to avoid a single
+    // gap (deselecting J10 next to the aisle with J9 still picked left
+    // J10 picked instead), so every step re-reads the selection instead of
+    // following a fixed list. Picks outside the block go first, those with
+    // a free neighbour before those at a block end; within one category the
+    // seat limit would block the new ones.
+    const tapAndWait = async (id) => {
+      const key = (p) => mineOf(p).map((t) => t.id).sort().join();
+      const before = key(readSeatPlan());
+      if (!tapSeat(id)) throw new Error('tap');
+      for (let i = 0; i < 30; i++) {
+        await sleep(150);
+        const p = readSeatPlan();
+        if (p && !p.seats.some((t) => t.pending) && key(p) !== before) return true;
+      }
+      return false;
+    };
+    const freeNext = (p, t) => [t.left, t.right].some((id) => p.seats.some((u) => u.id === id && u.status === 2 && !u.mine));
+    seatMapAuto = true;
+    box.classList.add('auto');
+    try {
+      for (let step = 0; step < n * 4 + 4 && !done(); step++) {
+        const p = readSeatPlan();
+        const mine = mineOf(p);
+        const drop = mine.filter((t) => !want.has(t.id)).sort((a, b) => freeNext(p, b) - freeNext(p, a));
+        const next = drop[0] || best.seats.find((t) => !mine.some((m) => m.id === t.id));
+        // A tap UCI ignored would only be ignored again.
+        if (!next || !(await tapAndWait(next.id))) break;
+      }
+      const cat = seatMapCategories(seatMapPlan || plan).get(best.section);
+      const nums = best.seats.map((t) => t.seat).sort((a, b) => a - b).join(', ');
+      seatMapHint(box, done() ? `Reihe ${best.row}, Platz ${nums}${cat ? ' · ' + cat.name : ''}`
+        : 'UCI hat die Auswahl angepasst. Bitte prüfen.');
+    } catch (err) {
+      console.warn(TAG, 'Beste Plätze failed:', err);
+      seatMapHint(box, 'Plätze konnten nicht gewählt werden.');
+    } finally {
+      seatMapAuto = false;
+      box.classList.remove('auto');
+      mountSeatMap();
+    }
+  }
+
   // Tooltip, legend highlight and clicks, delegated on the box so they
   // survive every redraw.
   function wireSeatMap(box) {
@@ -1562,6 +1699,9 @@
     box.addEventListener('pointerover', (e) => {
       const lg = e.target.closest && e.target.closest('.lg[data-sec]');
       const svg = box.querySelector('svg');
+      const pv = !seatMapAuto && e.target.closest && e.target.closest('.best') && seatMapPlan
+        ? new Set((bestSeatGroup(seatMapPlan, seatMapPlan.limit)?.seats || []).map((t) => t.id)) : null;
+      box.querySelectorAll('.st').forEach((g) => g.classList.toggle('pv', !!pv && pv.has(g.dataset.id)));
       if (svg) {
         svg.classList.toggle('hl', !!lg);
         svg.querySelectorAll('.st').forEach((g) => g.classList.toggle('on', !!lg && g.dataset.sec === lg.dataset.sec));
@@ -1581,11 +1721,17 @@
     });
     box.addEventListener('pointerleave', () => {
       tip.hidden = true;
+      box.querySelectorAll('.st.pv').forEach((g) => g.classList.remove('pv'));
       box.querySelector('svg')?.classList.remove('hl');
     });
     box.addEventListener('click', (e) => {
+      if (e.target.closest && e.target.closest('.best')) {
+        box.querySelectorAll('.st.pv').forEach((x) => x.classList.remove('pv'));
+        pickBestSeats(box);
+        return;
+      }
       const [g, t] = seatOf(e);
-      if (!g || !t || seatMapBusy) return;
+      if (!g || !t || seatMapBusy || seatMapAuto) return;
       const plan = seatMapPlan;
       if (!t.mine && t.status !== 2) return;
       const mine = plan.seats.filter((x) => x.mine).length;

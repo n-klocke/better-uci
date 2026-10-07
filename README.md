@@ -41,6 +41,9 @@ positions, categories are colour-coded with prices in the legend, and
 wheelchair spaces, loveseats and taken seats are marked. Hover a seat for
 its row, number and price. Selecting still runs through UCI's own seat
 logic.
+**★ Beste Plätze** picks the best free seats side by side for your ticket
+count: at the aisle first, then central, then about a third of the way
+back from the screen. Hover it to see the pick first.
 
 ## Booking page: card redemption
 <img width="553" alt="Unlimited Card panel on the payment step: own card and three saved cards, two pre-selected for two open seats" src="docs/screenshots/booking-cards.png" />

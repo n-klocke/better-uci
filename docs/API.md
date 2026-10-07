@@ -236,6 +236,16 @@ Used by the seat map in `better-uci.user.js` (`tapSeatIn`).
 - Wheelchair rows: Mundsburg Kino 8 names them `KR` (a suffix) for row
   `K`. The `R7` prefix form in the `seatStr` section above came from
   another hall, so expect both.
+- **Gap rule:** UCI moves a pick that would leave a single free seat next
+  to it. With 2 tickets and H1 free at the block end, tapping H2 selected
+  H1. With J10 (aisle) and J9 picked, deselecting J10 left J10 picked and
+  dropped J9. So code that taps several seats must check the selection
+  after every tap rather than assume it.
+- Model attributes `isAisleSeat` is true at every block end, wall side
+  included. `isEdgeSeat` was false everywhere in Kino 8.
+  `neighborLeftUnlinked`/`neighborRightUnlinked` are the strings
+  `"true"`/`"false"`.
+- Lowering the ticket count clears the seat selection; raising it keeps it.
 - Section models have only `name`, not colours. UCI's legend colours
   exist only in its DOM.
 
