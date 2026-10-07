@@ -1,5 +1,18 @@
 # Changelog
 
+## 3.7.0
+
+- **Beste Plätze is adjustable.** Under the button, "⚙ Gewichtung
+  anpassen" opens sliders:
+  - how much each goal matters (0–10): Gangplatz, Mittig, Reihe
+    einhalten, Günstig;
+  - where the target row is, from "ganz vorne" to "ganz hinten" (default
+    "⅓ von hinten").
+  While the panel is open, the map outlines the current pick and the panel
+  names it ("→ Reihe 3, Platz 10, 11 · PK 1 LOGE"). Settings are saved;
+  Zurücksetzen restores the defaults. Günstig starts at 0, so the default
+  pick is unchanged.
+
 ## 3.6.3
 
 - The Beste Plätze button moved from the seat map's header to right below

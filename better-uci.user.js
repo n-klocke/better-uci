@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         better-uci
 // @namespace    https://github.com/n-klocke/better-uci
-// @version      3.6.3
+// @version      3.7.0
 // @description  Batch-redeem UCI Unlimited cards on the booking page, and a denser, filterable programme browser on the kinoprogramm page.
 // @author       n-klocke
 // @license      MIT
@@ -27,7 +27,8 @@
   // GM.getValue/GM.setValue. To keep get/set synchronous for the rest of
   // the script, every key is read into a cache once before init, which is
   // why the keys are listed up front.
-  const STORE_KEYS = ['uci_cards_v1', 'uci_payment_method_v1', 'uci_browse_prefs_v1', 'uci_booking_off_v1'];
+  const STORE_KEYS = ['uci_cards_v1', 'uci_payment_method_v1', 'uci_browse_prefs_v1', 'uci_booking_off_v1',
+    'uci_seat_prefs_v1'];
   const store = (() => {
     const sync = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
     const gm4 = !sync && typeof GM === 'object' && GM !== null && typeof GM.getValue === 'function';
@@ -1345,6 +1346,20 @@
         background: rgba(255,241,1,.1); color: #fff101; font: 700 13px/1.4 -apple-system, system-ui, sans-serif;
         letter-spacing: 0; text-transform: none !important; cursor: pointer; white-space: nowrap; }
       #uci-best:hover { background: rgba(255,241,1,.2); }
+      /* text-align: the ticket column centres its text. */
+      #uci-best-prefs { margin: 4px 0 2px; color: #cfd6e0; text-align: left; font: 12.5px/1.4 -apple-system, system-ui, sans-serif; }
+      #uci-best-prefs .bp-row span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      #uci-best-prefs summary { cursor: pointer; color: #8b97a8; font-size: 12px; padding: 4px 2px; list-style: none; }
+      #uci-best-prefs summary::-webkit-details-marker { display: none; }
+      #uci-best-prefs summary::before { content: '⚙ '; }
+      #uci-best-prefs summary:hover { color: #cfd6e0; }
+      #uci-best-prefs .bp-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) 76px; align-items: center; gap: 8px;
+        margin: 4px 2px; font-weight: 400; }
+      #uci-best-prefs input[type=range] { width: 100%; margin: 0; accent-color: #fff101; }
+      #uci-best-prefs output { font-size: 11.5px; color: #8b97a8; text-align: right; white-space: nowrap; }
+      #uci-best-prefs .bp-foot { display: flex; justify-content: space-between; gap: 8px; margin: 8px 2px 2px; font-size: 12px; }
+      #uci-best-prefs .bp-pick { color: #fff101; }
+      #uci-best-prefs .bp-reset { color: #8b97a8; white-space: nowrap; }
       #uci-best.auto { opacity: .5; cursor: progress; }
       #uci-seatmap.auto svg { cursor: progress; }
       /* Preview of what Beste Plätze would pick, while hovering it. */
@@ -1408,6 +1423,7 @@
   function unmountSeatMap() {
     document.getElementById('uci-seatmap')?.remove();
     document.getElementById('uci-best')?.remove();
+    document.getElementById('uci-best-prefs')?.remove();
     document.getElementById('uci-seatmap-css')?.remove();
     document.documentElement.classList.remove('uci-seatmap');
     seatMapSig = ''; seatMapPlan = null; seatMapBusy = null;
@@ -1440,6 +1456,68 @@
     seatMapPlan = plan;
     seatMapBusy = null;
     renderSeatMap(box, plan);
+    if (document.getElementById('uci-best-prefs')?.open) previewBest(true);
+  }
+
+  // Beste Plätze weights, saved. Importance 0–10 per goal (5 = the
+  // defaults bestSeatGroup was tuned with), depth 0–100 % from the screen
+  // to the back wall.
+  const SEAT_PREFS_KEY = 'uci_seat_prefs_v1';
+  const SEAT_PREFS_DEFAULT = { aisle: 5, center: 5, row: 5, price: 0, depth: 67 };
+  let seatPrefs = (() => {
+    try { return Object.assign({}, SEAT_PREFS_DEFAULT, JSON.parse(store.get(SEAT_PREFS_KEY, '{}'))); }
+    catch { return Object.assign({}, SEAT_PREFS_DEFAULT); }
+  })();
+  const SEAT_PREF_ROWS = [
+    ['aisle', 'Gangplatz', 10], ['center', 'Mittig', 10], ['row', 'Reihe einhalten', 10],
+    ['price', 'Günstig', 10], ['depth', 'Zielreihe', 100],
+  ];
+  const depthLabel = (d) => (d <= 5 ? 'ganz vorne' : d >= 95 ? 'ganz hinten'
+    : Math.abs(d - 67) <= 2 ? '⅓ von hinten' : Math.abs(d - 50) <= 2 ? 'Mitte' : `${d} % nach hinten`);
+
+  // Outlines on the map what Beste Plätze would pick, and names it in the
+  // panel. Cleared with on = false.
+  function previewBest(on) {
+    const best = on && !seatMapAuto && seatMapPlan ? bestSeatGroup(seatMapPlan, seatMapPlan.limit) : null;
+    const ids = new Set((best?.seats || []).map((t) => t.id));
+    document.querySelectorAll('#uci-seatmap .st').forEach((g) => g.classList.toggle('pv', ids.has(g.dataset.id)));
+    const out = document.querySelector('#uci-best-prefs .bp-pick');
+    if (!out) return;
+    if (!seatMapPlan || !seatMapPlan.limit) { out.textContent = 'Erst Tickets wählen, dann zeigt die Karte die Auswahl.'; return; }
+    if (!best) { out.textContent = on ? 'Keine passenden Plätze frei.' : ''; return; }
+    const cat = seatMapCategories(seatMapPlan).get(best.section);
+    const nums = best.seats.map((t) => t.seat).sort((a, b) => a - b).join(', ');
+    out.textContent = `→ Reihe ${best.row}, Platz ${nums}${cat ? ' · ' + cat.name : ''}`;
+  }
+
+  function buildSeatPrefsPanel() {
+    const d = document.createElement('details');
+    d.id = 'uci-best-prefs';
+    d.innerHTML = '<summary>Gewichtung anpassen</summary>'
+      + SEAT_PREF_ROWS.map(([key, label, max]) => `<label class="bp-row"><span>${label}</span>`
+        + `<input type="range" min="0" max="${max}" data-k="${key}"><output></output></label>`).join('')
+      + '<div class="bp-foot"><span class="bp-pick"></span><a href="#" class="bp-reset">Zurücksetzen</a></div>';
+    const sync = () => d.querySelectorAll('input').forEach((i) => {
+      i.value = seatPrefs[i.dataset.k];
+      i.nextElementSibling.textContent = i.dataset.k === 'depth' ? depthLabel(+i.value) : i.value;
+    });
+    sync();
+    d.addEventListener('input', (e) => {
+      if (!e.target.dataset.k) return;
+      seatPrefs[e.target.dataset.k] = +e.target.value;
+      sync();
+      previewBest(true);
+    });
+    d.addEventListener('change', () => store.set(SEAT_PREFS_KEY, JSON.stringify(seatPrefs)));
+    d.addEventListener('toggle', () => previewBest(d.open));
+    d.querySelector('.bp-reset').addEventListener('click', (e) => {
+      e.preventDefault();
+      seatPrefs = Object.assign({}, SEAT_PREFS_DEFAULT);
+      store.set(SEAT_PREFS_KEY, JSON.stringify(seatPrefs));
+      sync();
+      previewBest(true);
+    });
+    return d;
   }
 
   // The Beste Plätze button sits right below the ticket picker
@@ -1457,21 +1535,19 @@
       btn.id = 'uci-best';
       btn.title = 'Wählt die besten freien Plätze nebeneinander';
       btn.textContent = '★ Beste Plätze wählen';
-      // Hovering outlines the pick on the map.
-      const preview = (on) => {
-        const ids = on && !seatMapAuto && seatMapPlan
-          ? new Set((bestSeatGroup(seatMapPlan, seatMapPlan.limit)?.seats || []).map((t) => t.id)) : null;
-        document.querySelectorAll('#uci-seatmap .st').forEach((g) => g.classList.toggle('pv', !!ids && ids.has(g.dataset.id)));
-      };
-      btn.addEventListener('pointerenter', () => preview(true));
-      btn.addEventListener('pointerleave', () => preview(false));
+      // Hovering outlines the pick on the map, as does the open panel.
+      const prefsOpen = () => !!document.getElementById('uci-best-prefs')?.open;
+      btn.addEventListener('pointerenter', () => previewBest(true));
+      btn.addEventListener('pointerleave', () => previewBest(prefsOpen()));
       btn.addEventListener('click', () => {
-        preview(false);
+        previewBest(false);
         const map = document.getElementById('uci-seatmap');
         if (map) pickBestSeats(map);
       });
     }
     if (tickets.nextElementSibling !== btn) tickets.after(btn);
+    const prefs = document.getElementById('uci-best-prefs') || buildSeatPrefsPanel();
+    if (btn.nextElementSibling !== prefs) btn.after(prefs);
   }
 
   // Price categories that have seats, priciest first, each with its
@@ -1607,15 +1683,23 @@
   // costs as much as ~3 seats off-centre or 4 rows, but beyond one row from
   // the target the row cost grows steeply, so an aisle elsewhere can't pull
   // the pick far away. East Side Gallery Kino 07 has a central aisle (at
-  // the wheelchair spaces) in the front row only.
+  // the wheelchair spaces) in the front row only. Those are the defaults;
+  // the Gewichtung panel scales each part (importance 0–10, 5 = default),
+  // moves the target line, and can add price (0.25 per € more than the
+  // cheapest category, at 5).
   // UCI moves picks that would leave a single free seat next to them (seen
   // live: picking H2 with H1 free selected H1 instead), so such blocks are
   // only used when nothing else fits. Loveseat pairs aren't split, and
   // wheelchair spaces are never picked. Your current seats count as free.
   // Returns the seats in tap order: from the end that touches the aisle or
   // a taken seat, so no half-picked state leaves a single gap either.
-  function bestSeatGroup(plan, n) {
+  function bestSeatGroup(plan, n, prefs = seatPrefs) {
     if (!(n > 0)) return null;
+    const k = (key) => (Number.isFinite(+prefs[key]) ? +prefs[key] : SEAT_PREFS_DEFAULT[key]) / 5;
+    const depth = Number.isFinite(+prefs.depth) ? +prefs.depth : SEAT_PREFS_DEFAULT.depth;
+    const priceOf = new Map(plan.sections.map((x) => [x.id, legendPrices ? legendPrices.get(x.name.trim()) : undefined]));
+    const prices = [...priceOf.values()].filter((v) => v != null);
+    const minPrice = prices.length ? Math.min(...prices) : 0;
     const all = plan.seats;
     const byId = new Map(all.map((t) => [t.id, t]));
     const avail = (t) => !!t && t.type !== 3 && (t.status === 2 || t.mine);
@@ -1625,7 +1709,8 @@
     const seatW = median(all.map((t) => t.w)) || 1;
     const rowYs = [...new Set(all.filter((t) => t.type !== 3).map((t) => Math.round(t.y)))].sort((a, b) => a - b);
     const rowPitch = median(rowYs.slice(1).map((y, i) => y - rowYs[i])) || seatW;
-    const cx = (minX + maxX) / 2, targetY = maxY - (maxY - minY) / 3;
+    // depth: 0 = at the screen, 100 = at the back wall.
+    const cx = (minX + maxX) / 2, targetY = minY + (maxY - minY) * depth / 100;
 
     // Loveseat partners, paired left to right as the map draws them.
     const partner = new Map();
@@ -1659,7 +1744,10 @@
         const gx = (g[0].x + g[n - 1].x + g[n - 1].w) / 2;
         const gy = g.reduce((s, t) => s + t.y + t.h / 2, 0) / n;
         const rowDist = Math.abs(gy - targetY) / rowPitch;
-        const cost = aisleDist + 0.3 * Math.abs(gx - cx) / seatW + 0.25 * rowDist + Math.max(0, rowDist - 1) ** 2;
+        const price = priceOf.get(g[0].section);
+        const cost = k('aisle') * aisleDist + k('center') * 0.3 * Math.abs(gx - cx) / seatW
+          + k('row') * (0.25 * rowDist + Math.max(0, rowDist - 1) ** 2)
+          + k('price') * 0.25 * (price != null ? price - minPrice : 0);
         const order = L === 0 || R !== 0 ? g : g.slice().reverse();
         const cand = { seats: order, cost, row: g[0].row, section: g[0].section };
         if (L === 1 || R === 1) { if (!bestGap || cost < bestGap.cost) bestGap = cand; }
