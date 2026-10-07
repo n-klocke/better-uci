@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         better-uci
 // @namespace    https://github.com/n-klocke/better-uci
-// @version      3.9.4
+// @version      3.9.5
 // @description  Batch-redeem UCI Unlimited cards on the booking page, and a denser, filterable programme browser on the kinoprogramm page.
 // @author       n-klocke
 // @license      MIT
@@ -779,7 +779,15 @@
   const pageAccess = () => (pageWin() ? 'direkt' : !useBridge ? 'keiner'
     : pageBridge.alive ? 'Bridge' : 'Bridge (keine Antwort)');
 
-  const loadCards = () => { try { return JSON.parse(store.get(STORE_KEY, '[]')); } catch { return []; } };
+  // Codes are trimmed on load, so ones saved earlier with a trailing space
+  // are cleaned too. With the space the card check passes, but applying it
+  // hung until a 504 and UCI then refused the whole booking for good
+  // (B-RT34 C-160, errorAction "exit"); trimmed, it applied in 11s.
+  // Confirmed 2026-10-07, docs/API.md.
+  const loadCards = () => {
+    try { return JSON.parse(store.get(STORE_KEY, '[]')).map((c) => ({ ...c, code: String(c.code).trim() })); }
+    catch { return []; }
+  };
   const saveCards = (c) => store.set(STORE_KEY, JSON.stringify(c));
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   // True once cond() holds, false after ms.
@@ -2380,7 +2388,7 @@
 
     const addCard = () => {
       const name = panel.querySelector('#uci-name').value.trim();
-      const code = panel.querySelector('#uci-code').value;   // not trimmed: padding matters
+      const code = panel.querySelector('#uci-code').value.trim();
       if (!name || !code) return;
       saveCards([...loadCards(), { name, code }]);
       panel.querySelector('#uci-name').value = '';
@@ -2405,7 +2413,7 @@
       const merged = loadCards();
       let added = 0;
       data.forEach((c) => {
-        if (!merged.some((m) => m.code.trim() === c.code.trim())) { merged.push({ name: c.name, code: c.code }); added++; }
+        if (!merged.some((m) => m.code.trim() === c.code.trim())) { merged.push({ name: c.name, code: c.code.trim() }); added++; }
       });
       saveCards(merged);
       box.value = '';

@@ -177,7 +177,30 @@ see `better-uci.user.js` for its usage.
   takes 5–7s, so anything fired right after the step appears collides
   with it. All the page's calls go through its jQuery, so `$.active === 0`
   means the booking is free.
-- Requests here are slow: 2.5–8.6s each, observed 2026-10-07.
+- Requests here are slow: 2.5–8.6s each, observed 2026-10-07. On the
+  evening of 2026-10-07 they took 7–18s, and some ended in HTTP 0 or a
+  504 after 60s. A retry after a 504 on a card check went through.
+- **Send card numbers trimmed** — confirmed 2026-10-07. Unlimited card
+  numbers are 13 characters (`book.unlimitedCustomerNumber`, and
+  `unlimitedTicketCardNo` once applied). Two saved friends' codes had a
+  trailing space. With the space, `determineBoniUnlimitedCardNumber`
+  still passed and echoed a 14-character `currentUnlimitedCard.number`.
+  The apply (`seatAction: 'unlimited'`) then hung until a 504. From then
+  on, every request on that booking, even a plain `joinLoyalty: 0`
+  refresh, failed in about 1s with `B-RT34 C-160` and
+  `errorAction: "exit"`. That was still the case 10 minutes later, so the
+  booking was dead. The same card, trimmed, applied in 11.5s on a new
+  booking. So C-160 can mean a dead booking, not only a request that
+  collided with another one.
+- **A friend's card can be refused for every seat.** For one card,
+  `determineBoni` returned `unlimitedTicketAvail: false` on all four Loge
+  seats, on two separate bookings, sent both trimmed and untrimmed. Other
+  friends' cards came back `true` for the same seats. The
+  `currentUnlimitedCard` record looked the same as an accepted card's:
+  `contractStatus: "canceled"` with a future `contractEnd`, same
+  `promoCode` and `cardBlock`. **OPEN:** why the server refuses it.
+- **IMAX Loge with Unlimited:** the 24,90 € ticket gets `discount: 20.9`,
+  which leaves 4,00 € to pay per card.
 
 ## Seat map internals (`book.seatingApp`) — confirmed 2026-10-06
 
