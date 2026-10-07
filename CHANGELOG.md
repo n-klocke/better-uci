@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.6.3
+
+- The Beste Plätze button moved from the seat map's header to right below
+  the ticket picker, as a full-width "★ Beste Plätze wählen". Hovering it
+  still outlines the pick on the map.
+
 ## 3.6.2
 
 - Beste Plätze aimed at the wrong third. Its target row is now a third of

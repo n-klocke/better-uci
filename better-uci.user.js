@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         better-uci
 // @namespace    https://github.com/n-klocke/better-uci
-// @version      3.6.2
+// @version      3.6.3
 // @description  Batch-redeem UCI Unlimited cards on the booking page, and a denser, filterable programme browser on the kinoprogramm page.
 // @author       n-klocke
 // @license      MIT
@@ -1338,14 +1338,14 @@
       #uci-seatmap .cnt { font-size: 12px; font-weight: 700; padding: 2px 10px; border-radius: 999px;
         background: rgba(255,255,255,.07); color: #cfd6e0; white-space: nowrap; }
       #uci-seatmap .cnt.full { background: #fff101; color: #000; }
-      #uci-seatmap .hdr { display: flex; align-items: center; gap: 8px; }
-      /* min-height/text-transform: the site's global button styles. */
-      #uci-seatmap .best { min-height: 0 !important; height: auto; margin: 0; border: 1px solid rgba(255,241,1,.45);
-        border-radius: 999px; padding: 2px 10px; background: rgba(255,241,1,.1); color: #fff101;
-        font: 700 12px/1.4 -apple-system, system-ui, sans-serif; letter-spacing: 0; text-transform: none !important;
-        cursor: pointer; white-space: nowrap; }
-      #uci-seatmap .best:hover { background: rgba(255,241,1,.2); }
-      #uci-seatmap.auto .best { opacity: .5; cursor: progress; }
+      /* Below the ticket picker (placeBestButton). min-height and
+         text-transform: the site's global button styles. */
+      #uci-best { display: block; width: 100%; min-height: 0 !important; height: auto; margin: 10px 0 2px;
+        padding: 8px 12px; border: 1px solid rgba(255,241,1,.45); border-radius: 10px;
+        background: rgba(255,241,1,.1); color: #fff101; font: 700 13px/1.4 -apple-system, system-ui, sans-serif;
+        letter-spacing: 0; text-transform: none !important; cursor: pointer; white-space: nowrap; }
+      #uci-best:hover { background: rgba(255,241,1,.2); }
+      #uci-best.auto { opacity: .5; cursor: progress; }
       #uci-seatmap.auto svg { cursor: progress; }
       /* Preview of what Beste Plätze would pick, while hovering it. */
       #uci-seatmap .st.pv .b { stroke: #fff101; stroke-width: 3; stroke-dasharray: 5 3; }
@@ -1407,6 +1407,7 @@
 
   function unmountSeatMap() {
     document.getElementById('uci-seatmap')?.remove();
+    document.getElementById('uci-best')?.remove();
     document.getElementById('uci-seatmap-css')?.remove();
     document.documentElement.classList.remove('uci-seatmap');
     seatMapSig = ''; seatMapPlan = null; seatMapBusy = null;
@@ -1425,21 +1426,52 @@
       injectSeatMapCSS();
       box = document.createElement('div');
       box.id = 'uci-seatmap';
-      box.innerHTML = '<div class="hd"><span class="ttl">Saalplan</span><span class="hdr">'
-        + '<button type="button" class="best" title="Wählt die besten freien Plätze nebeneinander">★ Beste Plätze</button>'
-        + '<span class="cnt"></span></span></div>'
+      box.innerHTML = '<div class="hd"><span class="ttl">Saalplan</span><span class="cnt"></span></div>'
         + '<div class="hint" role="status"></div><div class="scroll"></div><div class="lgd"></div><div class="tip" hidden></div>';
       container.insertBefore(box, document.getElementById('SeatingPlanComponentLayoutScreen') || container.firstChild);
       wireSeatMap(box);
       seatMapSig = '';
     }
     document.documentElement.classList.add('uci-seatmap');
+    placeBestButton(box);
     const sig = JSON.stringify(plan) + '|' + (legendPrices ? legendPrices.size : -1);
     if (sig === seatMapSig) return;
     seatMapSig = sig;
     seatMapPlan = plan;
     seatMapBusy = null;
     renderSeatMap(box, plan);
+  }
+
+  // The Beste Plätze button sits right below the ticket picker
+  // (#uci-tickets), since it acts on the ticket count. Re-placed on every
+  // call: UCI replaces the native ticket container on quantity changes, and
+  // mountTicketSelector re-anchors #uci-tickets after it. Without our own
+  // picker there's no button.
+  function placeBestButton(box) {
+    const tickets = document.getElementById('uci-tickets');
+    let btn = document.getElementById('uci-best');
+    if (!tickets) { btn?.remove(); return; }
+    if (!btn) {
+      btn = document.createElement('button');
+      btn.type = 'button';
+      btn.id = 'uci-best';
+      btn.title = 'Wählt die besten freien Plätze nebeneinander';
+      btn.textContent = '★ Beste Plätze wählen';
+      // Hovering outlines the pick on the map.
+      const preview = (on) => {
+        const ids = on && !seatMapAuto && seatMapPlan
+          ? new Set((bestSeatGroup(seatMapPlan, seatMapPlan.limit)?.seats || []).map((t) => t.id)) : null;
+        document.querySelectorAll('#uci-seatmap .st').forEach((g) => g.classList.toggle('pv', !!ids && ids.has(g.dataset.id)));
+      };
+      btn.addEventListener('pointerenter', () => preview(true));
+      btn.addEventListener('pointerleave', () => preview(false));
+      btn.addEventListener('click', () => {
+        preview(false);
+        const map = document.getElementById('uci-seatmap');
+        if (map) pickBestSeats(map);
+      });
+    }
+    if (tickets.nextElementSibling !== btn) tickets.after(btn);
   }
 
   // Price categories that have seats, priciest first, each with its
@@ -1669,6 +1701,7 @@
     const freeNext = (p, t) => [t.left, t.right].some((id) => p.seats.some((u) => u.id === id && u.status === 2 && !u.mine));
     seatMapAuto = true;
     box.classList.add('auto');
+    document.getElementById('uci-best')?.classList.add('auto');
     try {
       for (let step = 0; step < n * 4 + 4 && !done(); step++) {
         const p = readSeatPlan();
@@ -1688,6 +1721,7 @@
     } finally {
       seatMapAuto = false;
       box.classList.remove('auto');
+      document.getElementById('uci-best')?.classList.remove('auto');
       mountSeatMap();
     }
   }
@@ -1704,9 +1738,6 @@
     box.addEventListener('pointerover', (e) => {
       const lg = e.target.closest && e.target.closest('.lg[data-sec]');
       const svg = box.querySelector('svg');
-      const pv = !seatMapAuto && e.target.closest && e.target.closest('.best') && seatMapPlan
-        ? new Set((bestSeatGroup(seatMapPlan, seatMapPlan.limit)?.seats || []).map((t) => t.id)) : null;
-      box.querySelectorAll('.st').forEach((g) => g.classList.toggle('pv', !!pv && pv.has(g.dataset.id)));
       if (svg) {
         svg.classList.toggle('hl', !!lg);
         svg.querySelectorAll('.st').forEach((g) => g.classList.toggle('on', !!lg && g.dataset.sec === lg.dataset.sec));
@@ -1726,15 +1757,9 @@
     });
     box.addEventListener('pointerleave', () => {
       tip.hidden = true;
-      box.querySelectorAll('.st.pv').forEach((g) => g.classList.remove('pv'));
       box.querySelector('svg')?.classList.remove('hl');
     });
     box.addEventListener('click', (e) => {
-      if (e.target.closest && e.target.closest('.best')) {
-        box.querySelectorAll('.st.pv').forEach((x) => x.classList.remove('pv'));
-        pickBestSeats(box);
-        return;
-      }
       const [g, t] = seatOf(e);
       if (!g || !t || seatMapBusy || seatMapAuto) return;
       const plan = seatMapPlan;
