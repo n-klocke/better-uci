@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         better-uci
 // @namespace    https://github.com/n-klocke/better-uci
-// @version      3.6.1
+// @version      3.6.2
 // @description  Batch-redeem UCI Unlimited cards on the booking page, and a denser, filterable programme browser on the kinoprogramm page.
 // @author       n-klocke
 // @license      MIT
@@ -1569,13 +1569,13 @@
   // Beste Plätze: the best block of n free seats side by side in one row
   // and one price category. Preferences, strongest first: at the aisle
   // (UCI's isAisleSeat, true at every block end), central, then near the
-  // line one third back from the screen, rows in front of it and behind it
-  // weighing the same. Weighted rather than strictly in order: one seat
-  // further from the aisle costs as much as ~3 seats off-centre or 4 rows,
-  // but beyond one row from the target the row cost grows steeply. Without
-  // that, East Side Gallery Kino 07's front row won: it has an aisle in the
-  // middle (at the wheelchair spaces), while the target row's aisle seats
-  // are only at the far ends.
+  // line one third in from the back wall (between the back third and the
+  // middle third), rows in front of it and behind it weighing the same.
+  // Weighted rather than strictly in order: one seat further from the aisle
+  // costs as much as ~3 seats off-centre or 4 rows, but beyond one row from
+  // the target the row cost grows steeply, so an aisle elsewhere can't pull
+  // the pick far away. East Side Gallery Kino 07 has a central aisle (at
+  // the wheelchair spaces) in the front row only.
   // UCI moves picks that would leave a single free seat next to them (seen
   // live: picking H2 with H1 free selected H1 instead), so such blocks are
   // only used when nothing else fits. Loveseat pairs aren't split, and
@@ -1593,7 +1593,7 @@
     const seatW = median(all.map((t) => t.w)) || 1;
     const rowYs = [...new Set(all.filter((t) => t.type !== 3).map((t) => Math.round(t.y)))].sort((a, b) => a - b);
     const rowPitch = median(rowYs.slice(1).map((y, i) => y - rowYs[i])) || seatW;
-    const cx = (minX + maxX) / 2, targetY = minY + (maxY - minY) / 3;
+    const cx = (minX + maxX) / 2, targetY = maxY - (maxY - minY) / 3;
 
     // Loveseat partners, paired left to right as the map draws them.
     const partner = new Map();

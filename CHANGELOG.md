@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.6.2
+
+- Beste Plätze aimed at the wrong third. Its target row is now a third of
+  the way in from the back wall (between the back third and the middle
+  third), not a third back from the screen. Mundsburg Kino 8: row E
+  instead of J. East Side Gallery Kino 07: rows 3/2 instead of 5/6.
+
 ## 3.6.1
 
 - Beste Plätze no longer sends you to the front row in halls where only
