@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         better-uci
 // @namespace    https://github.com/n-klocke/better-uci
-// @version      3.7.3
+// @version      3.7.4
 // @description  Batch-redeem UCI Unlimited cards on the booking page, and a denser, filterable programme browser on the kinoprogramm page.
 // @author       n-klocke
 // @license      MIT
@@ -28,7 +28,7 @@
   // the script, every key is read into a cache once before init, which is
   // why the keys are listed up front.
   const STORE_KEYS = ['uci_cards_v1', 'uci_payment_method_v1', 'uci_browse_prefs_v1', 'uci_booking_off_v1',
-    'uci_seat_prefs_v2'];
+    'uci_seat_prefs_v3'];
   const store = (() => {
     const sync = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
     const gm4 = !sync && typeof GM === 'object' && GM !== null && typeof GM.getValue === 'function';
@@ -1462,10 +1462,11 @@
   // Beste Plätze weights, saved. Importance 0–10 per goal (5 = the unit
   // weights in bestSeatGroup's cost), depth 0–100 % from the screen
   // to the back wall.
-  // v2: the defaults changed in 3.7.1, and the panel saves every value,
-  // so v1 settings would have kept the old defaults.
-  const SEAT_PREFS_KEY = 'uci_seat_prefs_v2';
-  const SEAT_PREFS_DEFAULT = { aisle: 3, center: 6, row: 5, price: 0, depth: 75 };
+  // The key's version goes up when the defaults change (v2 in 3.7.1, v3
+  // in 3.7.4), since the panel saves every value and older settings would
+  // keep the old defaults.
+  const SEAT_PREFS_KEY = 'uci_seat_prefs_v3';
+  const SEAT_PREFS_DEFAULT = { aisle: 3, center: 6, row: 5, price: 0, depth: 67 };
   let seatPrefs = (() => {
     try { return Object.assign({}, SEAT_PREFS_DEFAULT, JSON.parse(store.get(SEAT_PREFS_KEY, '{}'))); }
     catch { return Object.assign({}, SEAT_PREFS_DEFAULT); }
@@ -1684,8 +1685,10 @@
   // isAisleSeat, true at every block end), central, near a target line
   // (prefs.depth, % from the screen to the back wall), and optionally
   // cheap; rows in front of the target and behind it weigh the same. At
-  // importance 5 a goal costs: 1 per seat between the block and the aisle,
-  // 0.3 per seat off-centre, 0.25 per row off the target plus the square
+  // importance 5 a goal costs: d²/(d+3) for d seats between the block and
+  // the aisle (0.25 at one seat, 0.8 at two, then close to 1 per seat, so
+  // a seat or two in from the aisle is nearly as good as at it), 0.3 per
+  // seat off-centre, 0.25 per row off the target plus the square
   // of every row beyond the first, and 0.25 per € above the cheapest
   // category. The steep row part keeps an aisle elsewhere from pulling the
   // pick far away: East Side Gallery Kino 07 has a central aisle (at the
@@ -1749,7 +1752,7 @@
         const gy = g.reduce((s, t) => s + t.y + t.h / 2, 0) / n;
         const rowDist = Math.abs(gy - targetY) / rowPitch;
         const price = priceOf.get(g[0].section);
-        const cost = k('aisle') * aisleDist + k('center') * 0.3 * Math.abs(gx - cx) / seatW
+        const cost = k('aisle') * aisleDist ** 2 / (aisleDist + 3) + k('center') * 0.3 * Math.abs(gx - cx) / seatW
           + k('row') * (0.25 * rowDist + Math.max(0, rowDist - 1) ** 2)
           + k('price') * 0.25 * (price != null ? price - minPrice : 0);
         const order = L === 0 || R !== 0 ? g : g.slice().reverse();
