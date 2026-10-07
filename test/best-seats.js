@@ -8,7 +8,7 @@
 // Prints each hall as text with the pick marked, and writes
 // test/out/best-seats.html with the same maps drawn to scale.
 //
-// Run: node test/best-seats.js [fixture-name-filter]
+// Run: node test/best-seats.js [case-id-filter]
 
 const fs = require('fs');
 const path = require('path');
@@ -132,8 +132,38 @@ function svgMap(fx, plan, pickIds, wantIds) {
   return `<svg viewBox="0 0 ${W} ${H}" style="max-width:${Math.min(900, W * 2)}px">${parts.join('')}</svg><div class="lg">${legend}</div>`;
 }
 
+// Makes a captured hall fuller: takes free seats until `fill` of all
+// seats are taken, the middle and the rows a third in from the back
+// first, as a hall fills in practice. Seeded, so a case shows the same
+// hall every run.
+function fillHall(plan, fill, seed) {
+  let r = seed >>> 0;
+  const rand = () => { r = (r + 0x6d2b79f5) >>> 0; let t = r; t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const seats = plan.seats.filter((t) => t.type !== 3);
+  const minX = Math.min(...seats.map((t) => t.x)), maxX = Math.max(...seats.map((t) => t.x + t.w));
+  const minY = Math.min(...seats.map((t) => t.y)), maxY = Math.max(...seats.map((t) => t.y + t.h));
+  const want = Math.round(seats.length * fill);
+  const byId = new Map(plan.seats.map((t) => [t.id, t]));
+  seats.filter((t) => t.status === 2)
+    .map((t) => {
+      const dx = Math.abs(t.x + t.w / 2 - (minX + maxX) / 2) / ((maxX - minX) / 2 || 1);
+      const dy = Math.abs(t.y - (minY + (maxY - minY) * 0.67)) / ((maxY - minY) || 1);
+      return { t, score: rand() * 1.2 - (dx * 0.7 + dy * 0.9) };
+    })
+    .sort((a, b) => b.score - a.score)
+    .forEach(({ t }) => {
+      // Bookings come in groups: a seat plus 0–3 neighbours to its right.
+      let left = want - seats.filter((u) => u.status !== 2).length;
+      for (let u = t, k = 1 + Math.floor(rand() * 4); u && u.status === 2 && k > 0 && left > 0; k--, left--) {
+        u.status = 4;
+        u = byId.get(u.right);
+      }
+    });
+}
+
 const filter = process.argv[2];
-const cases = require('./best-seats.cases.js').filter((c) => !filter || c.fixture.includes(filter));
+const cases = require('./best-seats.cases.js').filter((c) => !filter || c.id.includes(filter));
 const html = [];
 let failed = 0, passed = 0, review = 0;
 const fixtures = new Map();
@@ -148,6 +178,7 @@ cases.forEach((c, i) => {
     if (!t) throw new Error(`case ${i + 1}: no seat ${rs} in ${c.fixture}`);
     t.status = 4;
   });
+  if (c.fill) fillHall(plan, c.fill, c.seed || 1);
   plan.limit = c.n;
   const prefs = Object.assign({}, SEAT_PREFS_DEFAULT, c.prefs || {});
   const best = makeBest(SEAT_PREFS_DEFAULT, new Map(Object.entries(fx.prices)))(plan, c.n, prefs);
@@ -162,13 +193,13 @@ cases.forEach((c, i) => {
   }
   const status = ok === null ? 'pick' : ok ? '  ok' : 'FAIL';
   if (ok === null) review++; else if (ok) passed++; else failed++;
-  const title = `#${i + 1} ${fx.name}, ${c.n} Ticket${c.n > 1 ? 's' : ''}`;
+  const title = `${c.id}  ·  ${fx.name}, ${c.n} Ticket${c.n > 1 ? 's' : ''}${c.fill ? `, ${Math.round(c.fill * 100)} % voll` : ''}`;
   const line = `${status}  ${title}: ${pickLabel(best)}`
     + (wants.length && !ok ? `   (expected ${[].concat(c.expect).join(' or ')})` : '')
     + (c.prefs ? `   prefs ${JSON.stringify(c.prefs)}` : '');
   console.log(line);
   if (ok !== true) console.log(textMap(plan, pickIds, wantIds) + '\n');
-  html.push(`<section class="${ok === false ? 'fail' : ok ? 'ok' : ''}"><h2>${title}</h2>`
+  html.push(`<section id="${c.id}" class="${ok === false ? 'fail' : ok ? 'ok' : ''}"><h2>${title}</h2>`
     + `<p><b>Pick:</b> Reihe ${pickLabel(best)}${best ? ` · cost ${best.cost.toFixed(2)}` : ''}`
     + (wants.length ? ` · <b>Expected:</b> ${[].concat(c.expect).join(' or ')} ${ok ? '✓' : '✗'}` : '')
     + (c.note ? ` · ${c.note}` : '') + `</p>${svgMap(fx, plan, pickIds, wantIds)}</section>`);
@@ -181,8 +212,10 @@ fs.mkdirSync(outDir, { recursive: true });
 fs.writeFileSync(path.join(outDir, 'best-seats.html'), `<!doctype html><meta charset="utf-8"><title>Beste Plätze</title>
 <style>body{background:#0b1220;color:#e2e8f0;font:14px system-ui,sans-serif;margin:24px}section{margin:0 0 40px}
 h2{font-size:16px;margin:0 0 4px}section.fail h2{color:#f87171}section.ok h2{color:#4ade80}svg{display:block;width:100%;margin:8px 0}
+nav{display:flex;flex-wrap:wrap;gap:4px 12px;margin:0 0 32px;font-size:12px}nav a{color:#93c5fd}
 .lg span{margin-right:14px;font-size:12px;color:#94a3b8}.lg i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px}</style>
 <h1>Beste Plätze</h1><p>Defaults ${JSON.stringify(SEAT_PREFS_DEFAULT)}. Yellow outline = pick, green = expected (on failures). Screen at the top.</p>
+<nav>${cases.map((c) => `<a href="#${c.id}">${c.id}</a>`).join('')}</nav>
 ${html.join('\n')}`);
 console.log(`Report: ${path.relative(process.cwd(), path.join(outDir, 'best-seats.html'))}`);
 if (failed) process.exitCode = 1;
