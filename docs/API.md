@@ -207,6 +207,38 @@ real click makes. `bd` below is `book.seatingApp.bookingData`.
   The check was inconclusive because `book.priceRows` still showed the
   previous seats after stepping back and re-picking.
 
+### The real tap path, and the enums — confirmed 2026-10-07
+
+Used by the seat map in `better-uci.user.js` (`tapSeatIn`).
+
+- UCI's canvas is a Pixi view
+  (`components/SeatingPlan/core/views/SeatCollectionPixiView`, via
+  require.js). Its Hammer `tap` runs
+  `view.seatingHelper.onSeatSelectionStart(seat)`. The `release` that
+  follows runs `view.onTouchEnd()`, which calls
+  `seatingHelper.onSeatSelectionEnd()` once a selection is in progress.
+  Calling those two with a seat model does everything a real tap does:
+  select, deselect, enforce the seat limit (a tap past it does nothing),
+  and switch category (it drops the current picks and selects the
+  tapped seat). After `onSeatSelectionStart` alone, the seat is only
+  `markedForSelection`, and Weiter stays disabled.
+- The view isn't reachable from `book`. It is the `context` of its own
+  listeners in `bd.attributes.seats._events` (the entry with a
+  `seatingHelper`).
+- `core/enums/SeatType`: `REGULAR 1`, `LOVECHAIR 2`, `WHEELCHAIR 3`,
+  `HOUSESEAT 4`, `REMOVABLE 5`, `AISLE 0`. The model's `type` is the number
+  as a string.
+- `core/enums/SeatStatus`: `BROKEN 0`, `BLOCKED 1`, `FREE 2`,
+  `RESERVED 3`, `SOLD 4`, `PREPAID 5`, `LOCKEDFORSALE 6`,
+  `LOCKEDFORRESERVATIONS 7`, `LOCKEDFORSALEANDRESERVATION 13`,
+  `SELECTEDFREE 52`, `SELECTEDLOCKEDFORSALE 56`,
+  `SELECTEDLOCKEDFORRESERVATIONS 57`, `RESERVATION2SALE 53`.
+- Wheelchair rows: Mundsburg Kino 8 names them `KR` (a suffix) for row
+  `K`. The `R7` prefix form in the `seatStr` section above came from
+  another hall, so expect both.
+- Section models have only `name`, not colours. UCI's legend colours
+  exist only in its DOM.
+
 ## Ticket-type ID reference
 
 IDs are stable across price categories within a given performance (only

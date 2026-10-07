@@ -145,6 +145,10 @@ into the DOM, e.g. with a throwaway page-world overlay script.
 - `archive/seat-map.js` — the paused custom seat map, moved out of the
   userscript in v3.0.0. Not loaded by Tampermonkey; it's still where
   `parseSeatStr`, `rowKey`, `groupSeatsByRow`, and `seatMapHTML` live.
+  The current seat map (v3.5.0, `mountSeatMap` in the userscript) is a
+  separate rewrite. It reads `book.seatingApp` models and clicks through
+  UCI's own seat helper (see `docs/API.md`), not seatsAndTickets.json plus
+  synthetic canvas clicks.
 - `test/webmcp-stub.user.js` — testing-only helper script: a fake
   `document.modelContext` so the WebMCP tools can be exercised in a Chrome
   without WebMCP. Install it next to the local build, then call tools from

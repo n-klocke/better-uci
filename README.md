@@ -35,6 +35,13 @@ install. Saved cards don't sync from your desktop: bring them over with
 **Unlimited Cards verwalten** → Exportieren / Importieren.
 Only Safari works this way — Chrome, Firefox, etc. on iOS are all just
 Safari's engine underneath and can't run extensions at all.
+## Booking page: seat map
+Replaces UCI's seat canvas with a clearer map. Seats keep their real
+positions, categories are colour-coded with prices in the legend, and
+wheelchair spaces, loveseats and taken seats are marked. Hover a seat for
+its row, number and price. Selecting still runs through UCI's own seat
+logic.
+
 ## Booking page: card redemption
 <img width="553" alt="Unlimited Card panel on the payment step: own card and three saved cards, two pre-selected for two open seats" src="docs/screenshots/booking-cards.png" />
 

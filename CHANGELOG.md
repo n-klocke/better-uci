@@ -1,5 +1,23 @@
 # Changelog
 
+## 3.5.0
+
+- **New seat map** on the seat step, drawn in place of UCI's canvas. Every
+  seat sits at its real position and size, so aisles, gaps and the bigger
+  VIP seats look as they do in the hall. Each price category has its own
+  colour, and the legend shows its Erwachsener price. Also shown:
+  wheelchair spaces (icon), loveseat pairs (one sofa), taken seats (dimmed
+  ×), and your seats (yellow, with the seat number). Hovering a seat shows
+  "Reihe E · Platz 2" with its category and price. Hovering a legend entry
+  highlights that category. Row letters are on both sides. A counter shows
+  "1 von 2 Plätzen".
+- Clicks go to UCI's own seat handler, so the seat limit, switching
+  category and seat locking work exactly as before. The map also says
+  what UCI does silently: a click past the ticket count, or a click in
+  another category that drops your current picks. With seats picked, the
+  other categories are dimmed.
+- **better-uci: aus** brings back UCI's own map.
+
 ## 3.4.1
 
 - The bottom bar on the seat step counted "Noch keine Tickets" with seats

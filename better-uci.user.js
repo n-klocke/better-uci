@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         better-uci
 // @namespace    https://github.com/n-klocke/better-uci
-// @version      3.4.1
+// @version      3.5.0
 // @description  Batch-redeem UCI Unlimited cards on the booking page, and a denser, filterable programme browser on the kinoprogramm page.
 // @author       n-klocke
 // @license      MIT
@@ -613,6 +613,44 @@
         mine, taken: !mine && a.statusStr !== 'FREE' };
     });
   }
+  // Everything the custom seat map (mountSeatMap) draws: each seat with its
+  // position, type (core/enums/SeatType: 2 loveseat, 3 wheelchair), status
+  // (core/enums/SeatStatus: 2 free) and price category, plus the
+  // categories, the active one and the ticket count (seating limit).
+  function seatPlanOf(b) {
+    const bd = b && b.seatingApp && b.seatingApp.bookingData;
+    if (!bd || !bd.attributes) return null;
+    const secs = bd.attributes.sections;
+    const act = secs && typeof secs.getActiveSection === 'function' ? secs.getActiveSection() : null;
+    return {
+      active: act ? act.id : null,
+      limit: typeof bd.getSeatingLimit === 'function' ? +bd.getSeatingLimit() || 0 : 0,
+      sections: ((secs && secs.models) || []).map((x) => ({ id: x.id, name: String(x.get('name') || '') })),
+      seats: seatModelsOf(b).map((m) => {
+        const a = m.attributes;
+        return { id: String(m.id), x: +a.x, y: +a.y, w: +a.width, h: +a.height, row: String(a.row),
+          seat: String(a.seatNumber), type: +a.type, status: +a.status, section: m.getSectionId(),
+          mine: m.isSelected(), pending: !!(a.markedForSelection || a.markedForRemoval),
+          left: String(a.neighborLeft || 0), right: String(a.neighborRight || 0) };
+      }),
+    };
+  }
+  // A tap on a seat, exactly as UCI's canvas handles one (its Hammer "tap"
+  // and "release"): seatingHelper.onSeatSelectionStart(seat), then the
+  // view's onTouchEnd, which finishes the selection. The helper applies all
+  // of UCI's own rules: seat limit, switching price category, deselecting,
+  // locking server-side. The canvas view isn't reachable from book except
+  // as the context of its listeners on the seat collection.
+  function tapSeatIn(b, id) {
+    const seats = b.seatingApp.bookingData.attributes.seats;
+    const seat = seats.models.find((m) => String(m.id) === String(id));
+    const view = Object.values(seats._events || {}).flat().map((e) => e && e.context)
+      .find((c) => c && c.seatingHelper && typeof c.onTouchEnd === 'function');
+    if (!seat || !view) return false;
+    view.seatingHelper.onSeatSelectionStart(seat);
+    view.onTouchEnd();
+    return true;
+  }
 
   // Runs in the page's own JS world: pageBridge injects it as an inline
   // <script>, which UCI allows (it sends no Content-Security-Policy). It
@@ -651,6 +689,10 @@
               body: xhr.responseJSON || null, text: xhr.responseText || '' }));
         } else if (m.op === 'seatMap') {
           reply(m.id, { ok: true, result: seatMapOf(b) });
+        } else if (m.op === 'seatPlan') {
+          reply(m.id, { ok: true, result: seatPlanOf(b) });
+        } else if (m.op === 'tapSeat') {
+          reply(m.id, { ok: true, result: tapSeatIn(b, m.seatId) });
         } else if (m.op === 'apply') {
           Promise.resolve(b.handleBookingServerSuccess(m.resp)).then(
             () => reply(m.id, { ok: true }),
@@ -678,7 +720,7 @@
         if (done) { pending.delete(m.id); done(m); }
       });
       const s = document.createElement('script');
-      s.textContent = `${seatModelsOf}\n${selectedSeatsOf}\n${seatMapOf}\n(${pageBridgeMain})(${JSON.stringify(ch)});`;
+      s.textContent = `${seatModelsOf}\n${selectedSeatsOf}\n${seatMapOf}\n${seatPlanOf}\n${tapSeatIn}\n(${pageBridgeMain})(${JSON.stringify(ch)});`;
       (document.head || document.documentElement).appendChild(s);
       s.remove();
     }
@@ -688,10 +730,11 @@
       // Synchronous on purpose: the page-side listener runs, and replies,
       // inside dispatchEvent, so book stays readable like a plain object,
       // exactly as with unsafeWindow.
-      state() {
+      state() { return this.sync({ op: 'state' }); },
+      sync(msg) {
         inject();
         syncReply = null;
-        send({ id: 0, op: 'state' });
+        send(Object.assign({}, msg, { id: 0 }));
         return syncReply && syncReply.ok ? syncReply.result : null;
       },
       call(msg) {
@@ -1241,6 +1284,329 @@
       span.className = 'uci-legend-price';
       span.textContent = ' · ' + amount.toFixed(2).replace('.', ',') + ' €';
       label.append(span);
+    });
+  }
+
+  // Seat map, drawn by this script in place of UCI's canvas: each seat at
+  // its own position and size (the plan's own units, so aisles, gaps and
+  // staggered blocks stay exactly as they are), coloured by price category,
+  // with wheelchair spaces, loveseat pairs and taken seats marked. A click
+  // goes to UCI's own seat handler (tapSeatIn), so selecting, deselecting,
+  // the seat limit, switching category and server-side locking all stay
+  // UCI's. The canvas stays in the DOM, only moved off-screen, and the map
+  // redraws from the seat models whenever they change (polled, since the
+  // models live in the page world). Without seat data the native map stays.
+  const SM_COLORS = ['#f472b6', '#a78bfa', '#60a5fa', '#22d3ee', '#34d399', '#fb923c', '#f87171'];
+  const SM_WHEELCHAIR = '<g class="wc"><circle cx="12" cy="4.2" r="2.3"/>'
+    + '<path d="M10.6 7.6v6h6.1l2.6 5.4"/><path d="M8.3 10.7a6 6 0 1 0 8.4 7.5"/></g>';
+  let seatMapSig = '', seatMapPlan = null, seatMapBusy = null, seatMapHintTimer = 0;
+
+  function readSeatPlan() {
+    const w = pageWin();
+    if (w) return seatPlanOf(w.book);
+    return useBridge ? pageBridge.sync({ op: 'seatPlan' }) : null;
+  }
+  function tapSeat(id) {
+    const w = pageWin();
+    if (w) return tapSeatIn(w.book, id);
+    return useBridge ? pageBridge.sync({ op: 'tapSeat', seatId: id }) : false;
+  }
+
+  function injectSeatMapCSS() {
+    if (document.getElementById('uci-seatmap-css')) return;
+    const style = document.createElement('style');
+    style.id = 'uci-seatmap-css';
+    style.textContent = `
+      /* The native screen, canvas, "Reihe H | Platz 4" line and legend.
+         The canvas is moved off-screen, not display:none, so UCI's view
+         keeps its size and state for when the script is switched off. */
+      html.uci-seatmap #SeatingPlanComponentLayoutScreen,
+      html.uci-seatmap #SeatingPlanComponentLayoutSelectedSeats,
+      html.uci-seatmap #SeatingPlanComponentLayoutFooter { display: none !important; }
+      html.uci-seatmap #SeatingPlanComponentLayoutSeats { position: absolute !important; left: -20000px !important;
+        top: 0 !important; visibility: hidden !important; pointer-events: none !important; }
+      /* Basis instead of auto: the SVG's own width would otherwise push
+         the map below the ticket picker. */
+      html.uci-seatmap .backdrop-wrapper:has(#seatingplan) { flex: 1 1 420px !important; }
+      #uci-seatmap { position: relative; color: #e8edf3; padding: 2px 2px 0;
+        font: 13px/1.4 -apple-system, system-ui, sans-serif; }
+      #uci-seatmap .hd { display: flex; justify-content: space-between; align-items: center; gap: 10px;
+        margin: 0 4px 4px; min-height: 22px; }
+      #uci-seatmap .ttl { font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: #8b97a8; }
+      #uci-seatmap .cnt { font-size: 12px; font-weight: 700; padding: 2px 10px; border-radius: 999px;
+        background: rgba(255,255,255,.07); color: #cfd6e0; white-space: nowrap; }
+      #uci-seatmap .cnt.full { background: #fff101; color: #000; }
+      #uci-seatmap .hint { position: absolute; left: 50%; top: 30px; transform: translate(-50%, -4px); z-index: 6;
+        max-width: calc(100% - 24px); padding: 7px 12px; border-radius: 8px; background: #f2c94c; color: #1d1600;
+        font-size: 12.5px; font-weight: 600; text-align: center; box-shadow: 0 6px 20px rgba(0,0,0,.45);
+        opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; }
+      #uci-seatmap .hint.on { opacity: 1; transform: translate(-50%, 0); }
+      #uci-seatmap .scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+      #uci-seatmap svg { display: block; width: 100%; height: auto; margin: 0 auto; user-select: none;
+        -webkit-user-select: none; -webkit-tap-highlight-color: transparent; overflow: visible; }
+      #uci-seatmap .screen { fill: none; stroke: #eef4ff; stroke-width: 4; stroke-linecap: round; }
+      #uci-seatmap .scrtxt { fill: rgba(255,255,255,.42); font-size: 11px; font-weight: 700; letter-spacing: 5px; text-anchor: middle; }
+      #uci-seatmap .rl { fill: rgba(255,255,255,.36); font-size: 13px; font-weight: 700; text-anchor: middle; dominant-baseline: central; }
+      #uci-seatmap .s { transform-box: fill-box; transform-origin: center; transition: transform .12s ease, opacity .2s; }
+      #uci-seatmap .st.free, #uci-seatmap .st.mine { cursor: pointer; }
+      #uci-seatmap .st.free .b { fill: var(--c); }
+      #uci-seatmap .st.free:hover .s, #uci-seatmap .st.mine:hover .s { transform: scale(1.14); }
+      #uci-seatmap .st .bk { fill: rgba(0,0,0,.26); }
+      #uci-seatmap .st.taken .b { fill: rgba(255,255,255,.05); stroke: rgba(255,255,255,.1); stroke-width: 1; }
+      #uci-seatmap .st.taken .bk { display: none; }
+      #uci-seatmap .st .x { stroke: rgba(255,255,255,.22); stroke-width: 2; stroke-linecap: round; }
+      #uci-seatmap .st.mine .b { fill: #fff101; }
+      #uci-seatmap .st.mine .s { filter: drop-shadow(0 0 5px rgba(255,241,1,.75)); }
+      #uci-seatmap .st .n { fill: #000; font-size: 13px; font-weight: 800; text-anchor: middle; dominant-baseline: central; }
+      #uci-seatmap .wc { color: rgba(0,0,0,.62); }
+      #uci-seatmap .st.taken .wc { color: rgba(255,255,255,.42); }
+      #uci-seatmap .wc circle { fill: currentColor; }
+      #uci-seatmap .wc path { fill: none; stroke: currentColor; stroke-width: 2.3; stroke-linecap: round; stroke-linejoin: round; }
+      /* With seats picked, the other categories are dimmed: a click there
+         switches category and UCI drops the current picks. */
+      #uci-seatmap .st.free.off .s { opacity: .55; }
+      #uci-seatmap .hit { fill: transparent; }
+      #uci-seatmap svg.hl .st:not(.on) .s { opacity: .14; }
+      #uci-seatmap .st.busy .s { animation: uci-sm-pulse .7s ease-in-out infinite alternate; }
+      @keyframes uci-sm-pulse { to { opacity: .3; } }
+      #uci-seatmap .lgd { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 14px;
+        margin: 10px 4px 2px; font-size: 12px; color: #cfd6e0; }
+      #uci-seatmap .lg { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+      #uci-seatmap .lg[data-sec] { cursor: default; }
+      #uci-seatmap .lg i { width: 12px; height: 12px; border-radius: 3.5px; background: var(--c); flex: none; }
+      #uci-seatmap .lg i.mine { background: #fff101; box-shadow: 0 0 6px rgba(255,241,1,.7); }
+      #uci-seatmap .lg i.taken { background: rgba(255,255,255,.06); box-shadow: inset 0 0 0 1px rgba(255,255,255,.18); }
+      #uci-seatmap .lg svg { width: 14px; height: 14px; display: inline; margin: 0; }
+      #uci-seatmap .lg .wc { color: #cfd6e0; }
+      #uci-seatmap .lg i.love { width: 20px; border-radius: 6px; background: rgba(255,255,255,.5); }
+      #uci-seatmap .lg small { color: #8b97a8; font-size: 11.5px; }
+      #uci-seatmap .tip { position: absolute; z-index: 5; pointer-events: none; transform: translate(-50%, -100%);
+        padding: 5px 10px; border-radius: 8px; background: #fff; color: #0b1220; font-size: 12px; line-height: 1.35;
+        white-space: nowrap; box-shadow: 0 8px 24px rgba(0,0,0,.45); text-align: center; }
+      #uci-seatmap .tip b { display: block; font-size: 12.5px; }
+      #uci-seatmap .tip span { color: #4a5566; }
+      #uci-seatmap .tip::after { content: ''; position: absolute; left: 50%; bottom: -5px; margin-left: -5px;
+        border: 5px solid transparent; border-bottom: 0; border-top-color: #fff; }
+      @media (max-width: 640px) { #uci-seatmap .lgd { gap: 5px 10px; font-size: 11.5px; } }`;
+    (document.head || document.documentElement).appendChild(style);
+  }
+
+  function unmountSeatMap() {
+    document.getElementById('uci-seatmap')?.remove();
+    document.getElementById('uci-seatmap-css')?.remove();
+    document.documentElement.classList.remove('uci-seatmap');
+    seatMapSig = ''; seatMapPlan = null; seatMapBusy = null;
+  }
+
+  function mountSeatMap() {
+    if (scriptOff) return;
+    const container = document.getElementById('SeatingPlanComponentLayoutContainer');
+    if (!rendered(container)) return;
+    const plan = readSeatPlan();
+    if (!plan || !plan.seats.length || plan.seats.some((t) => !(t.w > 0) || isNaN(t.x) || isNaN(t.y))) return;
+    if (legendPrices === null) loadLegendPrices();
+    let box = document.getElementById('uci-seatmap');
+    if (!box || box.parentElement !== container) {
+      box?.remove();
+      injectSeatMapCSS();
+      box = document.createElement('div');
+      box.id = 'uci-seatmap';
+      box.innerHTML = '<div class="hd"><span class="ttl">Saalplan</span><span class="cnt"></span></div>'
+        + '<div class="hint" role="status"></div><div class="scroll"></div><div class="lgd"></div><div class="tip" hidden></div>';
+      container.insertBefore(box, document.getElementById('SeatingPlanComponentLayoutScreen') || container.firstChild);
+      wireSeatMap(box);
+      seatMapSig = '';
+    }
+    document.documentElement.classList.add('uci-seatmap');
+    const sig = JSON.stringify(plan) + '|' + (legendPrices ? legendPrices.size : -1);
+    if (sig === seatMapSig) return;
+    seatMapSig = sig;
+    seatMapPlan = plan;
+    seatMapBusy = null;
+    renderSeatMap(box, plan);
+  }
+
+  // Price categories that have seats, priciest first, each with its
+  // Erwachsener price (from the legend prices) and a colour by that rank.
+  function seatMapCategories(plan) {
+    const used = new Set(plan.seats.map((t) => t.section));
+    const cats = plan.sections.filter((x) => used.has(x.id)).map((x, i) => ({
+      id: x.id, name: x.name.trim(), order: i,
+      price: legendPrices ? legendPrices.get(x.name.trim()) : undefined,
+    }));
+    cats.sort((a, b) => ((b.price ?? -1) - (a.price ?? -1)) || a.order - b.order);
+    cats.forEach((c, i) => { c.color = SM_COLORS[i % SM_COLORS.length]; });
+    return new Map(cats.map((c) => [c.id, c]));
+  }
+
+  function renderSeatMap(box, plan) {
+    const cats = seatMapCategories(plan);
+    const seats = plan.seats;
+    const byId = new Map(seats.map((t) => [t.id, t]));
+    const f = (n) => Math.round(n * 10) / 10;
+    const minX = Math.min(...seats.map((t) => t.x)), maxX = Math.max(...seats.map((t) => t.x + t.w));
+    const minY = Math.min(...seats.map((t) => t.y)), maxY = Math.max(...seats.map((t) => t.y + t.h));
+    const G = 40, T = 96, spanW = maxX - minX, W = spanW + G * 2, H = maxY - minY + T + 10;
+    const ox = G - minX, oy = T - minY;
+
+    // Loveseat pairs: two type-2 seats that are each other's neighbours,
+    // drawn as one sofa, rounded only on its outer ends.
+    const half = new Map();   // id → 'l' | 'r', with the gap to fill
+    seats.filter((t) => t.type === 2).sort((a, b) => a.x - b.x).forEach((t) => {
+      const p = byId.get(t.right);
+      if (half.has(t.id) || !p || p.type !== 2 || half.has(p.id)) return;
+      const gap = Math.max(0, p.x - (t.x + t.w));
+      half.set(t.id, { side: 'l', gap }); half.set(p.id, { side: 'r', gap });
+    });
+    const path = (x, y, w, h, rl, rr) => `M${f(x + rl)},${f(y)}H${f(x + w - rr)}Q${f(x + w)},${f(y)} ${f(x + w)},${f(y + rr)}`
+      + `V${f(y + h - rr)}Q${f(x + w)},${f(y + h)} ${f(x + w - rr)},${f(y + h)}H${f(x + rl)}`
+      + `Q${f(x)},${f(y + h)} ${f(x)},${f(y + h - rl)}V${f(y + rl)}Q${f(x)},${f(y)} ${f(x + rl)},${f(y)}Z`;
+
+    const mineCount = seats.filter((t) => t.mine).length;
+    const parts = [];
+    seats.forEach((t) => {
+      const cat = cats.get(t.section);
+      const free = t.status === 2;
+      const state = t.mine ? 'mine' : free ? 'free' : 'taken';
+      const off = mineCount && plan.active != null && t.section !== plan.active ? ' off' : '';
+      const ins = Math.min(2.5, t.w * 0.08), r = t.w * 0.24;
+      let x = ins, w = t.w - ins * 2, rl = r, rr = r;
+      const pair = half.get(t.id);
+      if (pair && pair.side === 'l') { w += ins + pair.gap / 2; rr = 2; }
+      if (pair && pair.side === 'r') { x -= ins + pair.gap / 2; w += ins + pair.gap / 2; rl = 2; }
+      const h = t.h - ins * 2;
+      let inner = `<path class="b" d="${path(x, ins, w, h, rl, rr)}"/>`;
+      // The seat back, toward the audience (the screen is at the top).
+      const bh = t.h * 0.15, bx = x + (rl > 2 ? t.w * 0.1 : 0), bw = w - (rl > 2 ? t.w * 0.1 : 0) - (rr > 2 ? t.w * 0.1 : 0);
+      inner += `<path class="bk" d="${path(bx, ins + h - bh - t.h * 0.07, bw, bh, Math.min(bh / 2, rl), Math.min(bh / 2, rr))}"/>`;
+      if (t.type === 3) {
+        const k = t.w * 0.66 / 24;
+        inner += `<g transform="translate(${f(t.w * 0.17)},${f(t.h * 0.12)}) scale(${f(k * 100) / 100})">${SM_WHEELCHAIR}</g>`;
+      } else if (t.mine) {
+        inner += `<text class="n" x="${f(t.w / 2)}" y="${f(t.h * 0.44)}">${esc(t.seat)}</text>`;
+      } else if (!free) {
+        const a = t.w * 0.36, b = t.w * 0.64, c = t.h * 0.3, d = t.h * 0.58;
+        inner += `<path class="x" d="M${f(a)},${f(c)}L${f(b)},${f(d)}M${f(b)},${f(c)}L${f(a)},${f(d)}"/>`;
+      }
+      const busy = seatMapBusy === t.id ? ' busy' : '';
+      parts.push(`<g class="st ${state}${off}${busy}" data-id="${esc(t.id)}" data-sec="${esc(t.section)}"`
+        + ` style="--c:${cat ? cat.color : '#8b97a8'}" transform="translate(${f(t.x + ox)},${f(t.y + oy)})">`
+        + `<rect class="hit" x="-1" y="-5" width="${f(t.w + 2)}" height="${f(t.h + 10)}"/><g class="s">${inner}</g></g>`);
+    });
+
+    // Row labels on both sides, at each row's mean height. Wheelchair
+    // spaces carry their own row name ("KR" for row K, or "R7" for 7) and
+    // sit between rows, so they don't get a label of their own.
+    const rows = new Map();
+    seats.filter((t) => t.type !== 3).forEach((t) => {
+      const r = rows.get(t.row) || { sum: 0, n: 0 };
+      r.sum += t.y + t.h / 2; r.n++; rows.set(t.row, r);
+    });
+    const labels = [...rows].map(([name, r]) => {
+      const y = f(r.sum / r.n + oy);
+      return `<text class="rl" x="${G / 2 - 4}" y="${y}">${esc(name)}</text><text class="rl" x="${f(W - G / 2 + 4)}" y="${y}">${esc(name)}</text>`;
+    }).join('');
+
+    const sx1 = G + spanW * 0.05, sx2 = G + spanW * 0.95, cx = G + spanW / 2;
+    const svg = `<svg viewBox="0 0 ${f(W)} ${f(H)}" role="img" aria-label="Saalplan">
+      <defs>
+        <linearGradient id="uci-sm-cone" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#cfe0ff" stop-opacity=".16"/><stop offset="1" stop-color="#cfe0ff" stop-opacity="0"/>
+        </linearGradient>
+        <filter id="uci-sm-glow" x="-10%" y="-200%" width="120%" height="500%">
+          <feGaussianBlur stdDeviation="4" result="g"/><feMerge><feMergeNode in="g"/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
+      </defs>
+      <path d="M${f(sx1)},34 Q${f(cx)},8 ${f(sx2)},34 L${f(W - 4)},${T + 40} L4,${T + 40} Z" fill="url(#uci-sm-cone)"/>
+      <path class="screen" filter="url(#uci-sm-glow)" d="M${f(sx1)},34 Q${f(cx)},8 ${f(sx2)},34"/>
+      <text class="scrtxt" x="${f(cx)}" y="${T - 34}">LEINWAND</text>
+      ${labels}${parts.join('')}</svg>`;
+    const scroll = box.querySelector('.scroll');
+    scroll.innerHTML = svg;
+    const el = scroll.firstElementChild;
+    // Seats no smaller than ~14px (a typical hall still fits a phone; a
+    // very wide one scrolls sideways), and no larger than ~1.25× their own
+    // units on a wide screen.
+    el.style.minWidth = Math.round(W * 0.42) + 'px';
+    el.style.maxWidth = Math.round(W * 1.25) + 'px';
+
+    const cnt = box.querySelector('.cnt');
+    cnt.textContent = plan.limit ? `${mineCount} von ${plan.limit} ${plan.limit === 1 ? 'Platz' : 'Plätzen'}` : 'Erst Tickets wählen';
+    cnt.classList.toggle('full', !!plan.limit && mineCount >= plan.limit);
+
+    const legend = [...cats.values()].map((c) => `<span class="lg" data-sec="${esc(c.id)}"><i style="--c:${c.color}"></i>`
+      + `${esc(c.name)}${c.price != null ? ` <small>${eur(c.price)}</small>` : ''}</span>`);
+    legend.push('<span class="lg"><i class="mine"></i>Deine Plätze</span>', '<span class="lg"><i class="taken"></i>Belegt</span>');
+    if (seats.some((t) => t.type === 3)) legend.push(`<span class="lg"><svg viewBox="0 0 24 24">${SM_WHEELCHAIR}</svg>Rollstuhlplatz</span>`);
+    if (half.size) legend.push('<span class="lg"><i class="love"></i>Loveseat (Doppelsitz)</span>');
+    box.querySelector('.lgd').innerHTML = legend.join('');
+  }
+
+  function seatMapHint(box, text) {
+    const h = box.querySelector('.hint');
+    h.textContent = text;
+    h.classList.add('on');
+    clearTimeout(seatMapHintTimer);
+    seatMapHintTimer = setTimeout(() => h.classList.remove('on'), 3500);
+  }
+
+  // Tooltip, legend highlight and clicks, delegated on the box so they
+  // survive every redraw.
+  function wireSeatMap(box) {
+    const tip = box.querySelector('.tip');
+    const half = (t) => t.type === 2;
+    const seatOf = (e) => {
+      const g = e.target.closest && e.target.closest('.st');
+      return g && seatMapPlan ? [g, seatMapPlan.seats.find((t) => t.id === g.dataset.id)] : [null, null];
+    };
+    box.addEventListener('pointerover', (e) => {
+      const lg = e.target.closest && e.target.closest('.lg[data-sec]');
+      const svg = box.querySelector('svg');
+      if (svg) {
+        svg.classList.toggle('hl', !!lg);
+        svg.querySelectorAll('.st').forEach((g) => g.classList.toggle('on', !!lg && g.dataset.sec === lg.dataset.sec));
+      }
+      const [g, t] = seatOf(e);
+      if (!g || !t) { tip.hidden = true; return; }
+      const cat = seatMapCategories(seatMapPlan).get(t.section);
+      const row = t.type === 3 ? t.row.replace(/^R(?=\d)/, '').replace(/(\D)R$/, '$1') : t.row;
+      const kind = [t.type === 3 && 'Rollstuhlplatz', half(t) && 'Loveseat',
+        t.mine ? 'deine Wahl' : t.status !== 2 && 'belegt'].filter(Boolean).join(' · ');
+      tip.innerHTML = `<b>Reihe ${esc(row)} · Platz ${esc(t.seat)}</b><span>${esc(cat ? cat.name : '')}`
+        + `${cat && cat.price != null ? ' · ' + eur(cat.price) : ''}${kind ? ' · ' + esc(kind) : ''}</span>`;
+      const r = g.getBoundingClientRect(), b = box.getBoundingClientRect();
+      tip.style.left = Math.round(r.left + r.width / 2 - b.left) + 'px';
+      tip.style.top = Math.round(r.top - b.top - 6) + 'px';
+      tip.hidden = false;
+    });
+    box.addEventListener('pointerleave', () => {
+      tip.hidden = true;
+      box.querySelector('svg')?.classList.remove('hl');
+    });
+    box.addEventListener('click', (e) => {
+      const [g, t] = seatOf(e);
+      if (!g || !t || seatMapBusy) return;
+      const plan = seatMapPlan;
+      if (!t.mine && t.status !== 2) return;
+      const mine = plan.seats.filter((x) => x.mine).length;
+      const sameCat = plan.active != null && t.section === plan.active;
+      if (!t.mine && sameCat && plan.limit && mine >= plan.limit) {
+        seatMapHint(box, plan.limit === 1 ? 'Schon 1 Platz gewählt. Erst abwählen oder mehr Tickets wählen.'
+          : `Schon ${plan.limit} Plätze gewählt. Erst einen abwählen oder mehr Tickets wählen.`);
+        return;
+      }
+      if (!plan.limit) seatMapHint(box, 'Erst die Anzahl der Tickets wählen.');
+      else if (!t.mine && !sameCat && mine) seatMapHint(box, 'Andere Preiskategorie: die bisherige Auswahl wurde aufgehoben.');
+      seatMapBusy = t.id;
+      g.classList.add('busy');
+      let ok = false;
+      try { ok = tapSeat(t.id); } catch (err) { console.warn(TAG, 'Seat tap failed:', err); }
+      if (!ok) { seatMapBusy = null; g.classList.remove('busy'); seatMapHint(box, 'Platz konnte nicht gewählt werden.'); return; }
+      // The lock is a server round trip; redraw as soon as the models change.
+      [150, 500, 1000, 2000, 4000].forEach((ms) => setTimeout(() => {
+        if (ms === 4000) { seatMapBusy = null; box.querySelector('.st.busy')?.classList.remove('busy'); }
+        mountSeatMap();
+      }, ms));
     });
   }
 
@@ -2108,6 +2474,7 @@
       step('perfInfo', compactPerfInfo);
       step('stepBar', updateStepBar);
       step('legendPrices', annotateLegend);
+      step('seatMap', mountSeatMap);
       step('diag', () => {
         const d = `book:${getBook() ? 'ok' : '—'} bpid:${bpid() ? 'ok' : '—'} Seite:${pageAccess()} Speicher:${store.kind}`;
         ui.diag(d);
@@ -2128,6 +2495,9 @@
         updateBasket();
       });
     };
+    // The seat map redraws within half a second of a change, including
+    // seats other people take; poll() alone would lag 1.5s behind.
+    setInterval(() => { if (!scriptOff) step('seatMap', mountSeatMap); }, 500);
     (function poll() {
       setTimeout(poll, 1500);
       tick();
@@ -2163,6 +2533,7 @@
         b.remove();
       });
       restoreCheckoutButton();
+      unmountSeatMap();
       setNativeVisible(true);
     }
     tick();
