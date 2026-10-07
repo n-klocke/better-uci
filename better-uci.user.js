@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         better-uci
 // @namespace    https://github.com/n-klocke/better-uci
-// @version      3.8.0
+// @version      3.9.0
 // @description  Batch-redeem UCI Unlimited cards on the booking page, and a denser, filterable programme browser on the kinoprogramm page.
 // @author       n-klocke
 // @license      MIT
@@ -69,8 +69,8 @@
   // spec's plain JSON serialization.
   //
   // Anything in the page world can call a registered tool, so handlers
-  // never return Unlimited card numbers (masked only) and redeeming needs
-  // a click in better-uci's own confirmation.
+  // never return Unlimited card numbers (masked only), and redeeming and
+  // buying need a click in better-uci's own confirmation.
   const webmcp = (() => {
     const ch = 'better-uci-mcp-' + Math.random().toString(36).slice(2);
     const handlers = new Map();
@@ -780,6 +780,11 @@
   const loadCards = () => { try { return JSON.parse(store.get(STORE_KEY, '[]')); } catch { return []; } };
   const saveCards = (c) => store.set(STORE_KEY, JSON.stringify(c));
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  // True once cond() holds, false after ms.
+  const waitFor = async (cond, ms) => {
+    for (const t0 = Date.now(); Date.now() - t0 < ms; await sleep(200)) if (cond()) return true;
+    return !!cond();
+  };
   const safeParse = (t) => { try { return JSON.parse(t); } catch { return null; } };
   const mask = (c) => c.length > 6 ? c.slice(0, 4) + '…' + c.trim().slice(-4) : c;
   const eur = (n) => (n == null ? '—' : n.toFixed(2).replace('.', ',') + ' €');
@@ -2484,9 +2489,10 @@
 
   // ---------------------------------------------------------------- WebMCP
   // Booking-page tools (see webmcp at the top). The agent can read the
-  // booking, set the ticket count and pick seats on the seat step, and
-  // redeem Unlimited cards, your own and saved friends', on the payment
-  // step. "Weiter" and payment stay with the user.
+  // booking, set the ticket count and pick seats on the seat step, redeem
+  // Unlimited cards, your own and saved friends', on the payment step,
+  // press Weiter, and buy once the user confirms. Entering payment details
+  // (PayPal, Kreditkarte) stays with the user.
   const normName = (n) => String(n || '').normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase();
   const OWN_ALIASES = new Set(['ich', 'me', 'myself', 'self', 'own', 'mine']);
 
@@ -2574,7 +2580,18 @@
 
   // Agent-requested redemption always waits for a click here. Built with
   // textContent only: card names come from saved/imported JSON.
-  async function confirmAgentRedeem(people) {
+  function confirmAgentRedeem(people) {
+    return confirmAgent({
+      title: `KI-Assistent: ${people.length === 1 ? '1 Unlimited Card' : people.length + ' Unlimited Cards'} einlösen?`,
+      yes: 'Einlösen',
+      items: people.map((p) => [p.name, mask(p.code)]),
+    });
+  }
+
+  // The dialog behind every agent action that needs the user's click:
+  // showing, seat map and seats, then `items` as [left, right] lines and
+  // an optional `note` node. Resolves true only on the yes button.
+  async function confirmAgent({ title, yes, items, note }) {
     const rows = localRows();
     const covered = new Set(rows.filter((r) => !isOpen(r)).map((r) => r.seatRow + ' ' + r.seatRowPos));
     const map = await loadSeatMap().catch(() => []);
@@ -2604,6 +2621,8 @@
           #uci-mcp-confirm li{display:flex;justify-content:space-between;gap:10px;padding:3px 0;
             border-bottom:1px solid rgba(255,255,255,.08)}
           #uci-mcp-confirm li span:last-child{color:#98a4b3;font-family:ui-monospace,monospace;font-size:12px}
+          #uci-mcp-confirm .note{font-size:12.5px;color:#98a4b3;margin:-6px 0 14px}
+          #uci-mcp-confirm .note a{color:#e8edf3}
           #uci-mcp-confirm .btns{display:flex;gap:8px;justify-content:flex-end}
           /* site-wide button min-height:45px (CLAUDE.md) */
           #uci-mcp-confirm button{min-height:0;border:0;border-radius:5px;padding:8px 14px;
@@ -2613,10 +2632,10 @@
         <div class="dlg" role="dialog" aria-modal="true">
           <div class="t"></div><div class="perf"></div><div class="seats"></div><ul></ul>
           <div class="btns"><button type="button" data-a="0">Abbrechen</button>
-            <button type="button" class="yes" data-a="1">Einlösen</button></div>
+            <button type="button" class="yes" data-a="1"></button></div>
         </div>`;
-      box.querySelector('.t').textContent = `KI-Assistent: ${people.length === 1 ? '1 Unlimited Card'
-        : people.length + ' Unlimited Cards'} einlösen?`;
+      box.querySelector('.t').textContent = title;
+      box.querySelector('button.yes').textContent = yes;
       const info = readPerfInfo();
       box.querySelector('.perf').textContent = info
         ? [info.title + (info.version ? ` (${info.version})` : ''), info.when].filter(Boolean).join(' · ') : '';
@@ -2629,12 +2648,13 @@
       }
       if (map.length) seatsEl.before(seatMapSVG(map, covered));
       const ul = box.querySelector('ul');
-      people.forEach((p) => {
+      items.forEach(([left, right]) => {
         const li = document.createElement('li');
-        const n = document.createElement('span'); n.textContent = p.name;
-        const c = document.createElement('span'); c.textContent = mask(p.code);
+        const n = document.createElement('span'); n.textContent = left;
+        const c = document.createElement('span'); c.textContent = right;
         li.append(n, c); ul.append(li);
       });
+      if (note) ul.after(note);
       const done = (yes) => { box.remove(); resolve(yes); };
       box.querySelectorAll('button').forEach((b) => { b.onclick = () => done(b.dataset.a === '1'); });
       box.addEventListener('click', (e) => { if (e.target === box) done(false); });
@@ -2650,8 +2670,8 @@
         title: 'Buchung lesen',
         description: 'Read the current UCI cinema booking: which step it is on (seats, payment, confirm), '
           + 'the film and showing, the seats in the basket with what covers each one, and the amount still to pay. '
-          + 'The user is logged in. Seats are picked on the seat map, by the user or with pick_best_seats; '
-          + 'Unlimited cards can only be redeemed on the payment step.',
+          + 'The user is logged in. Flow: set_ticket_count → pick_best_seats → continue_booking → '
+          + 'redeem_unlimited_cards → continue_booking → (user enters payment if anything is due) → complete_purchase.',
         inputSchema: { type: 'object', properties: {} },
         annotations: { readOnlyHint: true },
         run: () => {
@@ -2824,8 +2844,95 @@
             results,
             seatsToPay: after ? after.open : null,
             amountDue: after ? Math.round(after.due * 100) / 100 : null,
-            next: 'The user presses "Weiter" to check out and pay; this tool never does.',
+            next: after && after.open > 0 ? 'Seats are still to pay; redeem more cards or continue_booking.'
+              : 'continue_booking goes on to the confirm step.',
           };
+        },
+      },
+      {
+        name: 'continue_booking',
+        title: 'Weiter',
+        description: 'Press the current step\'s Weiter. Seat step → payment step (needs tickets and as many seats '
+          + 'as tickets). Payment step → confirm step when Unlimited cards cover every seat; otherwise it opens '
+          + 'the payment methods (PayPal, Kreditkarte), where the user enters payment details themselves, '
+          + 'which agents cannot. Leaving the payment step locks out vouchers and Movie Points for this booking, '
+          + 'so redeem Unlimited cards first. Never buys: that is complete_purchase.',
+        inputSchema: { type: 'object', properties: {} },
+        run: async () => {
+          if (scriptOff) throw new Error('better-uci is switched off on this page.');
+          const a = stepAction();
+          if (!a) throw new Error('No step to continue from; the page may still be loading.');
+          const due = () => { const b = basket(); return b ? Math.round(b.due * 100) / 100 : null; };
+          if (a.step === 'seats') {
+            if (seatMapAuto) throw new Error('Seats are being picked right now.');
+            if (a.btn.disabled) throw new Error('Weiter is disabled: set the tickets and pick as many seats as tickets first.');
+            a.btn.click();
+            if (!(await waitFor(() => stepAction()?.step === 'payment', 30000)))
+              throw new Error('The payment step did not load. Check get_booking_state.');
+            return { step: 'payment', amountDue: due(),
+              next: 'Redeem Unlimited cards (list_unlimited_cards, redeem_unlimited_cards) if wanted, then continue_booking.' };
+          }
+          if (a.step === 'payment') {
+            if (running) throw new Error('A redemption is still running.');
+            const confirmed = () => stepAction()?.step === 'confirm';
+            const methodsOpen = () => ['pay-with-cc-button', 'pay-with-paypal-button']
+              .some((id) => rendered(document.getElementById(id)));
+            const waiting = () => ({ step: 'payment', waitingForUser: true, amountDue: due(),
+              next: 'The user chooses PayPal or Kreditkarte and enters the payment details on the page. '
+                + 'Once UCI shows the confirm step, complete_purchase.' });
+            // Shown instead of the paid flow when cards cover everything.
+            const free = document.getElementById('pay-with-balance-button');
+            if (rendered(free)) {
+              free.click();
+              if (!(await waitFor(confirmed, 30000))) throw new Error('The confirm step did not load. Check get_booking_state.');
+              return { step: 'confirm', amountDue: due(), next: 'complete_purchase asks the user and buys.' };
+            }
+            if (methodsOpen()) return waiting();
+            a.btn.click();
+            await waitFor(() => methodsOpen() || confirmed(), 20000);
+            if (confirmed()) return { step: 'confirm', amountDue: due(), next: 'complete_purchase asks the user and buys.' };
+            return waiting();
+          }
+          return { step: a.step, next: a.step === 'confirm' ? 'complete_purchase asks the user and buys.' : '' };
+        },
+      },
+      {
+        name: 'complete_purchase',
+        title: 'Jetzt kaufen',
+        description: 'On the confirm step, buy the tickets: shows the user a dialog with the showing, seats and '
+          + 'amount, and only on their click accepts UCI\'s terms of use and presses JETZT KAUFEN. Buying is '
+          + 'binding and charges the payment method the user entered (nothing when Unlimited cards cover '
+          + 'everything). Reach the confirm step with continue_booking first.',
+        inputSchema: { type: 'object', properties: {} },
+        annotations: { consequentialHint: true },
+        run: async () => {
+          if (scriptOff) throw new Error('better-uci is switched off on this page.');
+          if (stepAction()?.step !== 'confirm')
+            throw new Error('Not on the confirm step. Use continue_booking; if money is due, the user enters payment details first.');
+          const total = (document.querySelector('#customer-cart .customer-cart-total-price')?.textContent.trim() || '')
+            .replace(/(\d)\.(\d\d)/g, '$1,$2');
+          const note = document.createElement('div');
+          note.className = 'note';
+          const terms = document.createElement('a');
+          terms.href = 'https://www.uci-kinowelt.de/nutzungsbedingungen';
+          terms.target = '_blank';
+          terms.textContent = 'UCI Nutzungsbedingungen';
+          note.append('Mit „Jetzt kaufen“ akzeptierst du die ', terms, ' und buchst verbindlich.');
+          const yes = await confirmAgent({ title: 'KI-Assistent: Tickets jetzt kaufen?', yes: 'Jetzt kaufen',
+            items: [['Zu zahlen', total || '?']], note });
+          if (!yes) return { cancelled: true, note: 'The user cancelled.' };
+          const buy = document.getElementById('jetzt-kaufen-button');
+          if (stepAction()?.step !== 'confirm' || !buy) throw new Error('The confirm step is gone.');
+          // The terms checkbox, and the Movie Card one when UCI shows it.
+          ['payment-confirmation-abg-acceptance-checkbox', 'movie-card-confirmation-abg-acceptance-checkbox']
+            .map((id) => document.getElementById(id))
+            .filter((cb) => cb && !cb.classList.contains('d-none') && !cb.checked)
+            .forEach((cb) => cb.click());
+          if (!(await waitFor(() => !buy.disabled, 3000))) throw new Error('JETZT KAUFEN stayed disabled after accepting the terms.');
+          // After the reply: submitting navigates away, and the answer
+          // wouldn't reach the agent anymore.
+          setTimeout(() => buy.click(), 300);
+          return { submitted: true, amount: total, note: 'JETZT KAUFEN pressed; UCI now completes the purchase.' };
         },
       },
     ]);
@@ -4307,7 +4414,8 @@
           title: 'Buchung öffnen',
           description: 'Open the booking page for one showing (perfId and siteId from search_showtimes). '
             + 'The tab navigates away; on the booking page the booking tools (get_booking_state, '
-            + 'set_ticket_count, pick_best_seats, list_unlimited_cards, redeem_unlimited_cards) become available.',
+            + 'set_ticket_count, pick_best_seats, list_unlimited_cards, redeem_unlimited_cards, continue_booking, '
+            + 'complete_purchase) become available.',
           inputSchema: {
             type: 'object',
             properties: { perfId: { type: 'string' }, siteId: { type: 'string' } },
@@ -4321,8 +4429,7 @@
               const url = bookingUrl(s);
               setTimeout(() => location.assign(url), 300);
               return { opening: url, film: f.title, showing: showingForAgent(s),
-                next: 'Set tickets with set_ticket_count and seats with pick_best_seats (or the user picks them); '
-                  + 'the user presses Weiter to reach the payment step.' };
+                next: 'On the booking page: set_ticket_count, pick_best_seats, then continue_booking.' };
             }
             throw new Error('No showing with that perfId/siteId on this programme page.');
           },

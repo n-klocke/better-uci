@@ -92,8 +92,8 @@ Replaces the poster grid with a list view:
 API that lets a web page offer tools to an AI agent running in the browser.
 better-uci registers tools on both UCI pages, so an agent can answer "OV
 showings of Dune on Friday after 19:00?" from the real programme, and later
-"redeem my card and Anna's" on the booking page, without scraping or clicking
-through the site.
+"two seats, my card and Anna's" on the booking page, without scraping or
+clicking through the site.
 
 **Programme page** (`www.uci-kinowelt.de/kinoprogramm/…`):
 
@@ -113,18 +113,23 @@ through the site.
 | `pick_best_seats` | On the seat step, does what **★ Beste Plätze** does for the chosen ticket count. Weights (aisle, centre, row, price, target row) can be adjusted for one call, and `preview` only reports the pick. |
 | `list_unlimited_cards` | Your own card ("Ich", from your login) and saved friends' cards by name, with masked numbers and whether each is already redeemed on this booking. |
 | `redeem_unlimited_cards` | Redeems the named cards, yours and/or friends', on the payment step, at most one per open seat. |
+| `continue_booking` | Presses the current step's Weiter: seats → payment, then payment → confirm when cards cover every seat, or to the PayPal/Kreditkarte choice when something is left to pay. |
+| `complete_purchase` | On the confirm step, asks you in a dialog, then accepts the terms of use and presses **Jetzt kaufen**. |
+
+With Unlimited cards covering every seat, an agent can go from "Dune OV on
+Friday, two seats, my card and Anna's" to bought tickets, with you clicking
+twice: **Einlösen** and **Jetzt kaufen**.
 
 What the agent can't do:
-- **Redeem without you.** Every redemption opens the dialog above, with
-  a seat map of your booked seats, and nothing happens until you click
-  **Einlösen**. **Abbrechen** tells the agent
-  you declined.
+- **Redeem or buy without you.** Every redemption and every purchase
+  opens a better-uci dialog like the one above, with a seat map of your
+  booked seats, and nothing happens until you click **Einlösen** or
+  **Jetzt kaufen**. **Abbrechen** tells the agent you declined.
 - **See card numbers.** Only masked numbers (`1234…5678`) ever leave the
   script. Cards are chosen by name.
-- **Check out or pay.** The agent can choose tickets and select seats
-  (`set_ticket_count`, `pick_best_seats`), which only holds them in the
-  basket, the same as doing it yourself. Pressing Weiter and paying stay
-  with you.
+- **Enter payment details.** If something is left to pay, you choose PayPal
+  or Kreditkarte and enter the details yourself; the agent can only
+  continue once UCI shows the confirm step.
 
 How to use it: you need a browser with WebMCP support (currently Chrome's
 early preview, behind a flag) and an agent that reads WebMCP tools. The
@@ -148,7 +153,7 @@ browser, iPhone included, better-uci works exactly as before.
 - **WebMCP adds no network access.** The tools only exist inside the page and
   read what better-uci already reads. Any script on the page could call
   them, which is why they only return masked card numbers and why
-  redeeming always waits for your click.
+  redeeming and buying always wait for your click.
 ## Development
 The booking flow calls several undocumented UCI endpoints — see
 [`docs/API.md`](docs/API.md) for what's confirmed about each one (request

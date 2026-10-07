@@ -264,3 +264,30 @@ the price amounts change per category):
 Whether these exact ID strings are stable across different performances,
 films, or cinemas (as opposed to just across price categories within one
 performance) is **OPEN** — only ever observed within a single session.
+
+## Checkout steps (DOM) — confirmed 2026-10-07
+
+Walked live up to (not past) the payment details, 1 ticket, nothing paid:
+
+- **Seat step → payment:** `#nextStepButton` ("weiter"), disabled until
+  tickets and that many seats are picked. The payment step's
+  `#init-checkout-process-button` is rendered about 2s after the click.
+- **Payment step, something left to pay:** `#init-checkout-process-button`
+  opens "Buchungsabschluss und Zahlung hinterlegen"
+  (`#payment-type-others-content`), with the tabs
+  `#payment-type-paypal-tab` / `#payment-tab-cc-tab` and the buttons
+  `#pay-with-paypal-button` (redirects to PayPal) and
+  `#pay-with-cc-button`. Card details go into CrefoPay hosted-field
+  iframes (`api.crefopay.de/secureFields`). The confirm step isn't shown
+  yet at that point; `#init-checkout-process-button` stays rendered.
+- **Payment step, everything covered:** `#payment-type-free-content`
+  (hidden otherwise) holds `#pay-with-balance-button` ("Weiter zum
+  Zahlungsabschluss"). **OPEN:** not yet seen visible live.
+- **Confirm step:** `form#payment-confirmation-agb-acceptance` with
+  `#payment-confirmation-abg-acceptance-checkbox` (sic, "abg"), a second
+  `#movie-card-confirmation-abg-acceptance-checkbox` that is `d-none`
+  unless a Movie Card is involved, and the submit button
+  `#jetzt-kaufen-button` ("JETZT KAUFEN"), disabled until the terms are
+  ticked. **OPEN:** whether ticking the checkbox via `click()` enables the
+  button (expected, since it's UCI's own change handler), and where
+  the page goes after submitting.
