@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         better-uci
 // @namespace    https://github.com/n-klocke/better-uci
-// @version      3.7.0
+// @version      3.7.1
 // @description  Batch-redeem UCI Unlimited cards on the booking page, and a denser, filterable programme browser on the kinoprogramm page.
 // @author       n-klocke
 // @license      MIT
@@ -1459,11 +1459,13 @@
     if (document.getElementById('uci-best-prefs')?.open) previewBest(true);
   }
 
-  // Beste Plätze weights, saved. Importance 0–10 per goal (5 = the
-  // defaults bestSeatGroup was tuned with), depth 0–100 % from the screen
+  // Beste Plätze weights, saved. Importance 0–10 per goal (5 = the unit
+  // weights in bestSeatGroup's cost), depth 0–100 % from the screen
   // to the back wall.
-  const SEAT_PREFS_KEY = 'uci_seat_prefs_v1';
-  const SEAT_PREFS_DEFAULT = { aisle: 5, center: 5, row: 5, price: 0, depth: 67 };
+  // v2: the defaults changed in 3.7.1, and the panel saves every value,
+  // so v1 settings would have kept the old defaults.
+  const SEAT_PREFS_KEY = 'uci_seat_prefs_v2';
+  const SEAT_PREFS_DEFAULT = { aisle: 3, center: 6, row: 5, price: 0, depth: 75 };
   let seatPrefs = (() => {
     try { return Object.assign({}, SEAT_PREFS_DEFAULT, JSON.parse(store.get(SEAT_PREFS_KEY, '{}'))); }
     catch { return Object.assign({}, SEAT_PREFS_DEFAULT); }
@@ -1473,7 +1475,7 @@
     ['price', 'Günstig', 10], ['depth', 'Zielreihe', 100],
   ];
   const depthLabel = (d) => (d <= 5 ? 'ganz vorne' : d >= 95 ? 'ganz hinten'
-    : Math.abs(d - 67) <= 2 ? '⅓ von hinten' : Math.abs(d - 50) <= 2 ? 'Mitte' : `${d} % nach hinten`);
+    : Math.abs(d - 75) <= 2 ? '¼ von hinten' : Math.abs(d - 67) <= 2 ? '⅓ von hinten' : Math.abs(d - 50) <= 2 ? 'Mitte' : `${d} % nach hinten`);
 
   // Outlines on the map what Beste Plätze would pick, and names it in the
   // panel. Cleared with on = false.
@@ -1675,18 +1677,17 @@
   }
 
   // Beste Plätze: the best block of n free seats side by side in one row
-  // and one price category. Preferences, strongest first: at the aisle
-  // (UCI's isAisleSeat, true at every block end), central, then near the
-  // line one third in from the back wall (between the back third and the
-  // middle third), rows in front of it and behind it weighing the same.
-  // Weighted rather than strictly in order: one seat further from the aisle
-  // costs as much as ~3 seats off-centre or 4 rows, but beyond one row from
-  // the target the row cost grows steeply, so an aisle elsewhere can't pull
-  // the pick far away. East Side Gallery Kino 07 has a central aisle (at
-  // the wheelchair spaces) in the front row only. Those are the defaults;
-  // the Gewichtung panel scales each part (importance 0–10, 5 = default),
-  // moves the target line, and can add price (0.25 per € more than the
-  // cheapest category, at 5).
+  // and one price category, by a weighted cost. Goals: at the aisle (UCI's
+  // isAisleSeat, true at every block end), central, near a target line
+  // (prefs.depth, % from the screen to the back wall), and optionally
+  // cheap; rows in front of the target and behind it weigh the same. At
+  // importance 5 a goal costs: 1 per seat between the block and the aisle,
+  // 0.3 per seat off-centre, 0.25 per row off the target plus the square
+  // of every row beyond the first, and 0.25 per € above the cheapest
+  // category. The steep row part keeps an aisle elsewhere from pulling the
+  // pick far away: East Side Gallery Kino 07 has a central aisle (at the
+  // wheelchair spaces) in the front row only. Importance scales each part
+  // linearly; the defaults are SEAT_PREFS_DEFAULT.
   // UCI moves picks that would leave a single free seat next to them (seen
   // live: picking H2 with H1 free selected H1 instead), so such blocks are
   // only used when nothing else fits. Loveseat pairs aren't split, and

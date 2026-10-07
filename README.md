@@ -42,8 +42,8 @@ wheelchair spaces, loveseats and taken seats are marked. Hover a seat for
 its row, number and price. Selecting still runs through UCI's own seat
 logic.
 **★ Beste Plätze** picks the best free seats side by side for your ticket
-count: at the aisle first, then central, then about a third of the way
-in from the back wall. Hover it to see the pick first. **⚙ Gewichtung
+count: central and at the aisle, about a quarter of the way in from the
+back wall. Hover it to see the pick first. **⚙ Gewichtung
 anpassen** below it sets how much each goal matters, adds price as a
 goal, and moves the target row.
 

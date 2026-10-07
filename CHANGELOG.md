@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.7.1
+
+- New Beste Plätze defaults: Gangplatz 3, Mittig 6, Reihe einhalten 5,
+  Günstig 0, Zielreihe 75 % nach hinten ("¼ von hinten"). Settings saved
+  with 3.7.0 are reset to these once.
+
 ## 3.7.0
 
 - **Beste Plätze is adjustable.** Under the button, "⚙ Gewichtung
