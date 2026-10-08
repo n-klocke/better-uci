@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         better-uci
 // @namespace    https://github.com/n-klocke/better-uci
-// @version      3.10.0
+// @version      3.10.1
 // @description  Batch-redeem UCI Unlimited cards on the booking page, a denser, filterable programme browser, and cleaner film and cinema home pages.
 // @author       n-klocke
 // @license      MIT
@@ -3184,41 +3184,69 @@
           .film-page .col-md-10 > .title-legend, .film-page .film-schedule, .film-page > .mt-8`,
       home: `main > .keyvisual-detail, .page-content > .film-slider-wrapper, .page-content > .weischer-banner`,
     };
+    // Pages this script replaces. The @match covers the whole domain, and
+    // holding back, say, the shop or Cloudflare's check page would be wrong.
+    const managed = pageKind !== 'programme' || /^\/(kinoprogramm|coming-soon)(\/|$)/.test(location.pathname);
+
+    // Held back until the view is final: on a managed page, <main> and the
+    // footer stay transparent (opacity, so nothing inside can override it)
+    // while the view is built, then fade in in their final layout. Without
+    // this the page jumped three times on the home page (measured): native
+    // news and footer painted under a spinner, then pushed down when the
+    // view mounted at DOMContentLoaded, then again when the programme fetch
+    // filled "Als Nächstes" and added "Neu im Kino". reveal() ends it; the
+    // views call it once their layout is complete (mountFilmPage right after
+    // rendering, mountHomePage once the programme is in), and the timeout
+    // below makes sure no page stays hidden if that never happens.
     (function hideEarly() {
       if (!document.documentElement) { setTimeout(hideEarly, 0); return; }
+      if (managed) document.documentElement.classList.add('ub-pending', 'ub-managed');
       const earlyStyle = document.createElement('style');
       // Off while html.ub-native is set ("Original-Ansicht zeigen"): with
       // !important, no inline style could bring the native page back.
       earlyStyle.textContent = `
         html:not(.ub-native) :is(${EARLY_HIDE[pageKind]})
           { display: none !important; }
-        #uci-browse-loading{padding:60px 20px;text-align:center;color:#8b97a8;font-size:13px}
+        html.ub-pending:not(.ub-native) :is(main, footer.footer){opacity:0 !important}
+        html.ub-managed :is(main, footer.footer){transition:opacity .2s ease-out}
+        #uci-browse-loading{position:fixed;left:0;right:0;top:38vh;z-index:5;pointer-events:none;
+          text-align:center;color:#8b97a8;font-size:13px}
         .ub-spinner{width:32px;height:32px;margin:0 auto 12px;border:3px solid rgba(255,255,255,.15);
           border-top-color:#fff101;border-radius:50%;animation:ub-spin .8s linear infinite}
         @keyframes ub-spin{to{transform:rotate(360deg)}}`;
       (document.head || document.documentElement).appendChild(earlyStyle);
     })();
 
-    // document.body doesn't exist yet at true document-start either, so
-    // this is on its own separate retry rather than assuming hideEarly's
-    // timing covers it too — <html> and <body> don't appear at the same
-    // moment during parsing. Only on pages this script actually replaces:
-    // the @match covers the whole domain, and a spinner on, say, the shop
-    // or Cloudflare's check page would only ever time out.
-    let spinner = null, spinnerTimeout;
-    const wantsSpinner = pageKind !== 'programme' || /^\/(kinoprogramm|coming-soon)(\/|$)/.test(location.pathname);
-    (function showSpinner() {
-      if (!wantsSpinner) return;
+    // A fixed overlay, outside <main>: it takes no layout space, so its
+    // removal can't move anything. Only after a short delay, so a page that
+    // is ready quickly just fades in without a spinner flashing first.
+    // document.body doesn't exist yet at true document-start, hence the
+    // retry.
+    let spinner = null, revealed = false;
+    const spinnerDelay = setTimeout(function showSpinner() {
+      if (!managed || revealed) return;
       if (!document.body) { setTimeout(showSpinner, 0); return; }
       spinner = document.createElement('div');
       spinner.id = 'uci-browse-loading';
       spinner.innerHTML = '<div class="ub-spinner"></div>' + (pageKind === 'programme' ? 'Lädt Kinoprogramm…' : 'Lädt…');
-      (document.querySelector('main') || document.body).prepend(spinner);
-      // Hard timeout in case mounting never happens (UCI changed its
-      // markup, or a programme URL without a .movies-grid).
-      spinnerTimeout = setTimeout(() => spinner.remove(), 5000);
-    })();
-    const hideSpinner = () => { clearTimeout(spinnerTimeout); if (spinner) spinner.remove(); };
+      document.body.appendChild(spinner);
+    }, 250);
+    function reveal() {
+      if (revealed) return;
+      revealed = true;
+      clearTimeout(spinnerDelay);
+      if (spinner) spinner.remove();
+      document.documentElement.classList.remove('ub-pending');
+    }
+    // Hard cap in case mounting never happens (UCI changed its markup, a
+    // programme URL without a .movies-grid, a very slow page).
+    if (managed) setTimeout(reveal, 8000);
+
+    // The home view needs the programme page's data. Requested now, in
+    // parallel with the page itself, not at DOMContentLoaded: the cinema
+    // slug in the URL is enough (/kinoprogramm/<slug> serves the same
+    // programme as /kinoprogramm/<slug>/<siteId>/poster).
+    const homeFetch = pageKind === 'home' ? fetchHomeProgramme() : null;
 
     const PREF_KEY = 'uci_browse_prefs_v1';
     let prefs = { ovOnly: false, newOnly: false };
@@ -4621,7 +4649,7 @@
     function giveUp(why) {
       console.warn(TAG, why, '- showing the original page');
       document.documentElement.classList.add('ub-native');
-      hideSpinner();
+      reveal();
     }
 
     // -------------------------------------------------------------- film
@@ -4824,7 +4852,7 @@
       }
 
       render();
-      hideSpinner();
+      reveal();
       // Started showings drop off without a reload.
       setInterval(() => { if (view.isConnected && view.style.display !== 'none') render(); }, 60000);
       console.log(TAG, 'film page mounted:', film.title, all.length, 'showings');
@@ -4882,6 +4910,26 @@
       return out;
     }
 
+    // The home page itself only carries today's remaining showings for a
+    // few films; the programme page has the whole week (~100 KB
+    // compressed). Retried like /coming-soon, for UCI's passing 502s.
+    // Resolves to { html } or { error }, never rejects.
+    async function fetchHomeProgramme() {
+      const slug = (location.pathname.match(/^\/home\/([^/]+)/) || [])[1];
+      try {
+        let res;
+        for (let attempt = 0; ; attempt++) {
+          res = await fetch(`/kinoprogramm/${slug}`, { credentials: 'same-origin' });
+          if (res.ok || attempt >= 2) break;
+          await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+        }
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return { html: await res.text() };
+      } catch (err) {
+        return { error: err.message };
+      }
+    }
+
     function mountHomePage() {
       const slug = (location.pathname.match(/^\/home\/([^/]+)/) || [])[1];
       const siteId = document.querySelector('.film-slider-wrapper[data-site-id]')?.dataset.siteId;
@@ -4934,7 +4982,7 @@
         const el = box('uh-next');
         const head = (pills) => `<div class="uv-sec-head"><div class="uv-h">Als Nächstes</div>${pills}</div>`;
         if (state.load === 'loading') {
-          el.innerHTML = head('') + '<div class="uh-skel">' + '<div></div>'.repeat(4) + '</div>';
+          el.innerHTML = head('') + '<div class="uh-skel">' + '<div></div>'.repeat(10) + '</div>';
           return;
         }
         if (state.load === 'error') {
@@ -5059,40 +5107,39 @@
         });
       }
 
-      renderNext();
-      renderSliders(new Set());
-      hideSpinner();
-
-      // The home page itself only carries today's remaining showings for
-      // a few films; the programme page has the whole week (~100 KB
-      // compressed). Retried like /coming-soon, for UCI's passing 502s.
-      (async () => {
-        try {
-          let res;
-          for (let attempt = 0; ; attempt++) {
-            res = await fetch(progHref + '/poster', { credentials: 'same-origin' });
-            if (res.ok || attempt >= 2) break;
-            await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
-          }
-          if (!res.ok) throw new Error('HTTP ' + res.status);
-          const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
-          const { films } = programme(doc);
-          // Relative to the fetched page's own URL (DOMParser keeps none).
-          films.forEach((f) => {
-            if (f.poster) f.poster = new URL(f.poster, location.origin).pathname;
-            if (f.filmId) filmById.set(f.filmId, f);
-          });
-          if (!films.length) throw new Error('no films in programme');
+      function applyProgramme(result) {
+        const films = result.html ? programme(new DOMParser().parseFromString(result.html, 'text/html')).films : [];
+        // Relative to the fetched page's own URL (DOMParser keeps none).
+        films.forEach((f) => {
+          if (f.poster) f.poster = new URL(f.poster, location.origin).pathname;
+          if (f.filmId) filmById.set(f.filmId, f);
+        });
+        if (films.length) {
           state.films = films;
           state.load = 'ok';
           console.log(TAG, 'home: programme loaded,', films.length, 'films');
-        } catch (err) {
+        } else {
           state.load = 'error';
-          console.warn(TAG, 'home: programme fetch failed:', err.message);
+          console.warn(TAG, 'home: programme fetch failed:', result.error || 'no films in programme');
         }
-        renderNext();
-        renderSliders(state.load === 'ok' ? renderNew() : new Set());
-      })();
+      }
+
+      // Shown once, complete: the page stays held back (see reveal) until
+      // the programme is in, usually already by now since it was requested
+      // at document-start. Capped, so a slow fetch shows the page with
+      // placeholders and fills "Als Nächstes" and "Neu im Kino" in later.
+      Promise.race([homeFetch, new Promise((r) => setTimeout(r, 2500, null))]).then((early) => {
+        try {
+          if (early) applyProgramme(early);
+          renderNext();
+          renderSliders(state.load === 'ok' ? renderNew() : new Set());
+          reveal();
+          if (!early) homeFetch.then((late) => { applyProgramme(late); renderNext(); if (state.load === 'ok') renderNew(); });
+        } catch (err) {
+          console.error(TAG, err);
+          giveUp('home render failed');
+        }
+      });
 
       // "in 12 min" counts down, and started showings drop off.
       setInterval(() => { if (state.load === 'ok' && view.style.display !== 'none') renderNext(); }, 60000);
@@ -5257,8 +5304,9 @@
         border-radius:999px;padding:4px 12px;white-space:nowrap}
       #uci-home .uh-buy:hover{background:#fff101;color:#000}
       #uci-home .uh-more{margin-top:10px}
-      #uci-home .uh-skel{display:flex;flex-direction:column;gap:10px}
-      #uci-home .uh-skel div{height:48px;border-radius:8px;
+      /* About as tall as the 10 rows that replace it (62px each). */
+      #uci-home .uh-skel{display:flex;flex-direction:column;gap:8px}
+      #uci-home .uh-skel div{height:54px;border-radius:8px;
         background:linear-gradient(90deg,rgba(255,255,255,.04),rgba(255,255,255,.09),rgba(255,255,255,.04));
         background-size:200% 100%;animation:uh-shimmer 1.2s linear infinite}
       @keyframes uh-shimmer{to{background-position:-200% 0}}
@@ -5348,7 +5396,7 @@
       // click. Renders again when it arrives.
       if (demnaechstState === 'idle') loadDemnaechst();
       registerBrowseTools();
-      hideSpinner();
+      reveal();
       console.log(TAG, 'mounted, replacing .movies-grid');
       return true;
     }
