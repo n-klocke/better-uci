@@ -106,7 +106,9 @@ about 20 minutes of ads, then the runtime). Plot, director and cast come last.
   showing.
 - **Vorverkauf**, **Events** (as a dated list) and **Familie & Kinder**.
 
-Both pages keep **Original-Ansicht zeigen** at the bottom.
+The programme, film and home views share one header: your cinema (click
+to switch) and **Übersicht | Programm** to move between them. Every view
+keeps **Original-Ansicht zeigen** at the bottom.
 
 ## AI agents (WebMCP)
 <img width="360" alt="better-uci's confirmation dialog for an agent's request to redeem two Unlimited cards, with a seat map of the booked seats" src="docs/screenshots/webmcp-confirm.png" />

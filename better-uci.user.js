@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         better-uci
 // @namespace    https://github.com/n-klocke/better-uci
-// @version      3.10.2
+// @version      3.11.0
 // @description  Batch-redeem UCI Unlimited cards on the booking page, a denser, filterable programme browser, and cleaner film and cinema home pages.
 // @author       n-klocke
 // @license      MIT
@@ -3177,7 +3177,8 @@
     // mount() gets to run.
     const EARLY_HIDE = {
       programme: `.movies-grid, [data-schedule-filters-wrapper],
-          .pimcore_area_keyvisual-kinowelt, .switch-tabs, #scheduleContainerVorverkauf`,
+          .pimcore_area_keyvisual-kinowelt, .switch-tabs-wrapper, #scheduleContainerVorverkauf,
+          .container-standard > .cinema-select`,
       // Not the whole .col-md-10: the cinema picker modal lives in there
       // too, and a modal inside a display:none parent can't show.
       film: `.film-page > .keyvisual-detail, .film-page .film-container,
@@ -3956,6 +3957,7 @@
       const searchSelEnd = searchHadFocus ? document.activeElement.selectionEnd : null;
 
       panel.innerHTML = `
+        ${progCtx ? `<div class="ub-head">${viewHeaderHTML(progCtx, 'programme')}</div>` : ''}
         <div class="ub-bar">
           <div class="ub-tabs">${tabsHTML}</div>
           <div class="ub-toggles">
@@ -4033,6 +4035,7 @@
           render();
         };
       });
+      if (progCtx) wireCinemaPick(panel, progCtx);
       const nt = panel.querySelector('#ub-native-toggle');
       if (nt) nt.onclick = () => setNativeVisible(true);
 
@@ -4050,6 +4053,8 @@
       }
     }
     let remeasured = false;
+    // Read once at mount, before UCI's heading is hidden (see EARLY_HIDE).
+    let progCtx = null;
 
     // "Original-Ansicht zeigen": the html.ub-native class switches off the
     // early CSS, the matching rules in STYLE and enforceHidden(), and every
@@ -4079,8 +4084,8 @@
     }
 
     const STYLE = `
-      #uci-browse{max-width:960px;margin:0 auto;font-size:14px;line-height:1.45;
-        color:#fff;background:#10141c;border-radius:10px;padding:14px;
+      #uci-browse{max-width:960px;margin:24px auto 40px;font-size:14px;line-height:1.45;
+        color:#fff;background:#10141c;border-radius:10px;padding:16px;
         box-shadow:0 2px 14px rgba(0,0,0,.25)}
       #uci-browse .ub-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
         border-bottom:1px solid rgba(255,255,255,.1);padding-bottom:10px;margin-bottom:8px}
@@ -4109,7 +4114,7 @@
         /* One swipeable row instead of three wrapped ones (measured: the
            11 tabs took 3 rows / 149px before the first film at 386px). */
         #uci-browse .ub-tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
-          -webkit-overflow-scrolling: touch; margin: 0 -14px; padding: 0 14px; }
+          -webkit-overflow-scrolling: touch; margin: 0 -16px; padding: 0 16px; }
         #uci-browse .ub-tabs::-webkit-scrollbar { display: none; }
         #uci-browse .ub-tab { flex: 0 0 auto; white-space: nowrap; }
       }
@@ -4192,7 +4197,7 @@
       #uci-browse .film-row.film-row--preview{--accent:79,157,222}
       #uci-browse .film-row.film-row--midnight{--accent:230,70,70}
       #uci-browse .film-row.film-row--womens{--accent:235,110,170}
-      #uci-browse .film-row.film-row--accent::before{content:'';position:absolute;left:-8px;
+      #uci-browse .film-row.film-row--accent::before{content:'';position:absolute;left:-9px;
         top:6px;bottom:6px;width:3px;border-radius:2px;background:rgb(var(--accent))}
       #uci-browse .film-row.film-row--accent:hover{background:rgba(var(--accent),.07)}
       :is(#uci-browse,#uci-film,#uci-home) .ub-badges{display:flex;flex-wrap:wrap;gap:4px;line-height:1;margin-bottom:3px}
@@ -4210,6 +4215,25 @@
         overflow:hidden;text-overflow:ellipsis}
       #uci-browse .film-chips{display:flex;flex-wrap:wrap;gap:5px;flex:1;
         min-height:57px;align-items:center;align-content:center}
+
+      /* The header all three views share (viewHeaderHTML). */
+      #uci-browse .ub-head{padding-bottom:14px;margin-bottom:12px;border-bottom:1px solid rgba(255,255,255,.1)}
+      :is(#uci-browse,#uci-film,#uci-home) .uv-header{display:flex;align-items:center;justify-content:space-between;gap:10px 16px;flex-wrap:wrap}
+      :is(#uci-browse,#uci-film,#uci-home) .uv-where{display:flex;flex-direction:column;align-items:flex-start;gap:2px;min-width:0;margin:0;padding:0;
+        min-height:0;background:none;border:0;color:#fff;font-family:inherit;text-align:left;cursor:pointer}
+      :is(#uci-browse,#uci-film,#uci-home) .uv-kicker{font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#8b97a8}
+      :is(#uci-browse,#uci-film,#uci-home) .uv-cname{display:inline-flex;align-items:center;gap:7px;font-size:19px;font-weight:800;line-height:1.2}
+      :is(#uci-browse,#uci-film,#uci-home) .uv-cname svg{width:14px;height:14px;flex:0 0 auto;color:#fff101}
+      :is(#uci-browse,#uci-film,#uci-home) .uv-where:hover .uv-cname{text-decoration:underline;text-decoration-color:rgba(255,241,1,.6);text-underline-offset:3px}
+      :is(#uci-browse,#uci-film,#uci-home) .uv-nav{display:flex;gap:2px;padding:3px;border-radius:8px;background:rgba(255,255,255,.06)}
+      :is(#uci-browse,#uci-film,#uci-home) .uv-navtab{padding:5px 14px;border-radius:6px;font-size:13px;font-weight:600;line-height:1.45;
+        color:#cfd6e0;text-decoration:none;white-space:nowrap}
+      :is(#uci-browse,#uci-film,#uci-home) .uv-navtab:hover{background:rgba(255,255,255,.08);color:#fff}
+      :is(#uci-browse,#uci-film,#uci-home) .uv-navtab.active{background:#fff101;color:#000}
+      :is(#uci-browse,#uci-film,#uci-home) .uv-h{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#fff101}
+      @media (max-width: 640px) {
+        :is(#uci-browse,#uci-film,#uci-home) .uv-cname{font-size:16px}
+      }
 
       /* Fixed size, not content-sized: every chip reserves the second
          (lang/format) line and shares one width, so a row reads as an even
@@ -4263,9 +4287,9 @@
       #uci-browse .film-row.cs-row .film-title{display:block;overflow:visible}
       #uci-browse .film-row.cs-row .film-chips{flex:0 0 auto}
       #uci-browse .cs-buy-btn{display:inline-block;padding:7px 16px;border-radius:6px;
-        background:#4f9dde;color:#fff;font-weight:700;font-size:13px;text-decoration:none;
+        background:#fff101;color:#000;font-weight:700;font-size:13px;text-decoration:none;
         white-space:nowrap;flex:0 0 auto}
-      #uci-browse .cs-buy-btn:hover{background:#6bb0e8}
+      #uci-browse .cs-buy-btn:hover{background:#fff64d}
       #uci-browse .cs-buy-btn--disabled{background:rgba(255,255,255,.06);color:#6b7684;
         cursor:default;pointer-events:none}
       #uci-browse .cs-buy-btn--disabled:hover{background:rgba(255,255,255,.06)}
@@ -4297,13 +4321,15 @@
 
       #uci-browse .extra-date-group{margin:0}
       #uci-browse .extra-date-head{font-size:12px;font-weight:700;color:#fff101;
+        text-transform:uppercase;letter-spacing:.08em;
         margin:10px 0 4px;padding-top:6px;border-top:1px solid rgba(255,255,255,.1);
         cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px}
       #uci-browse .extra-date-head::-webkit-details-marker{display:none}
       #uci-browse .extra-date-head::before{content:'▸';display:inline-block;color:#6b7684;
         transition:transform .15s}
       #uci-browse .extra-date-group[open] .extra-date-head::before{transform:rotate(90deg)}
-      #uci-browse .extra-date-count{font-weight:400;color:#6b7684;font-size:11px}
+      #uci-browse .extra-date-count{font-weight:400;color:#6b7684;font-size:11px;
+        text-transform:none;letter-spacing:0}
       #uci-browse .ub-empty{padding:24px 4px;color:#8b97a8;text-align:center;font-size:13px}
       #uci-browse .ub-foot{margin-top:10px;text-align:center}
       #uci-browse .ub-foot span,#uci-browse .ub-foot a{font-size:11px;color:#6b7684;cursor:pointer;
@@ -4343,7 +4369,13 @@
       /* Real navigation (Aktuelles Programm / Demnächst → /coming-soon),
          but 150px for two links is a lot of scroll cost. Kept reachable via
          a small link in our own footer instead — see ub-foot below. */
-      html:not(.ub-native) .switch-tabs{display:none !important}`;
+      html:not(.ub-native) .switch-tabs-wrapper{display:none !important}
+
+      /* With everything above the panel gone, these two spacers alone put
+         it ~160px below the header: .switch-tabs-wrapper's 82px padding
+         (an anchor offset; hidden above) and .page-content's 80px margin.
+         Without them the panel sits where the film and home panels do. */
+      html:not(.ub-native) main > .page-content{margin-top:0 !important}`;
 
     // The view switcher and search box have no unique class names, only
     // Bootstrap utility combinations that repeat elsewhere, so they're
@@ -4622,6 +4654,45 @@
       href && cinemaPath && /^\/film\/[^/]+\/\d+\/?$/.test(href) ? href.replace(/\/$/, '') + '/' + cinemaPath : href;
     const pinIcon = '<svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" aria-hidden="true"><path d="M8 16s6-5.7 6-10A6 6 0 0 0 2 6c0 4.3 6 10 6 10m0-7a3 3 0 1 1 0-6 3 3 0 0 1 0 6"/></svg>';
 
+    // The cinema a page is about, from its URL (/home/<slug>,
+    // /kinoprogramm/<slug>/<id>, /film/<film>/<id>/<slug>/<id>), plus the
+    // native button that opens UCI's cinema picker and the cinema's name.
+    // /kinoprogramm/<slug> works without the id too.
+    function cinemaContext() {
+      const p = location.pathname;
+      const m = p.match(/^\/home\/([^/]+)/) || p.match(/^\/kinoprogramm\/([^/]+)(?:\/(\d+))?/)
+        || p.match(/^\/film\/[^/]+\/\d+\/([^/]+)\/(\d+)/);
+      const slug = m ? m[1] : null;
+      const siteId = (m && m[2]) || document.querySelector('[data-site-id]')?.dataset.siteId || null;
+      return {
+        slug, siteId,
+        btn: document.querySelector('.cinema-select button[data-bs-target]') || document.querySelector('[data-bs-target="#cinemaSelectModal"]'),
+        name: (document.querySelector('.cinema-select button [aria-hidden="true"]')?.textContent || '').trim(),
+        home: slug ? `/home/${slug}` : '/',
+        programme: slug ? `/kinoprogramm/${slug}` + (siteId ? `/${siteId}` : '') : '/kinoprogramm',
+      };
+    }
+
+    // The same header on all three views: the cinema (click to switch)
+    // and Übersicht | Programm, which is what makes them one thing. The
+    // film page highlights neither.
+    function viewHeaderHTML(ctx, current) {
+      const tab = (key, label, href) => `<a class="uv-navtab${current === key ? ' active' : ''}" href="${esc(href)}"`
+        + `${current === key ? ' aria-current="page"' : ''}>${label}</a>`;
+      return `<div class="uv-header">
+          <button type="button" class="uv-where uv-cinema-pick" title="Kino wechseln">
+            <span class="uv-kicker">UCI Kino</span>
+            <span class="uv-cname">${esc(ctx.name || 'Kino wählen')}${pinIcon}</span>
+          </button>
+          <nav class="uv-nav">${tab('home', 'Übersicht', ctx.home)}${tab('programme', 'Programm', ctx.programme)}</nav>
+        </div>`;
+    }
+    // UCI's picker is a Bootstrap modal opened by a delegated click
+    // handler, so a click on its (hidden) native button still works.
+    function wireCinemaPick(root, ctx) {
+      root.querySelectorAll('.uv-cinema-pick').forEach((b) => { b.onclick = () => ctx.btn && ctx.btn.click(); });
+    }
+
     // "Original-Ansicht zeigen" for these views: html.ub-native switches
     // the early CSS off; the panel hides.
     function wireNativeToggle(view) {
@@ -4690,17 +4761,13 @@
         });
       });
 
-      const cinemaBtn = col.querySelector('.cinema-select button') || document.querySelector('[data-bs-target="#cinemaSelectModal"]');
-      const cinemaName = (col.querySelector('.cinema-select button [aria-hidden="true"]')?.textContent || '').trim();
-      const m = location.pathname.match(/^\/film\/[^/]+\/\d+\/([^/]+)\/(\d+)/);
       return Object.assign(info, {
-        showtimes, facts, backdrop, extras, cinemaBtn, cinemaName,
+        showtimes, facts, backdrop, extras,
         posterSrc: img ? img.getAttribute('src') : info.poster,
         posterSrcset: img ? img.getAttribute('srcset') : null,
         fskText: (box.querySelector('.age-rating-info__title')?.textContent || '').trim(),
         trailerBtn: page.querySelector('.trailerplayer-trigger'),
         hasSchedule: !!col.querySelector('.film-schedule'),
-        programmeHref: m ? `/kinoprogramm/${m[1]}/${m[2]}` : '/kinoprogramm',
       });
     }
 
@@ -4708,6 +4775,7 @@
       const film = parseFilmPage();
       if (!film) { giveUp('film page: no .film-container'); return; }
       const page = document.querySelector('.film-page');
+      const ctx = cinemaContext();
       injectViewStyle();
       const view = document.createElement('div');
       view.id = 'uci-film';
@@ -4747,7 +4815,7 @@
           return `<div class="uv-empty">${film.hasSchedule
             ? 'Für dieses Kino sind gerade keine Vorstellungen geplant.'
             : 'Wähle ein Kino, um die Vorstellungen zu sehen.'}
-            ${film.cinemaBtn ? '<br><button type="button" class="uv-btn uv-cinema-pick">Kino wählen</button>' : ''}</div>`;
+            ${ctx.btn ? '<br><button type="button" class="uv-btn uv-cinema-pick">Kino wählen</button>' : ''}</div>`;
         }
         const shown = all.filter(notStarted).filter(langOk).filter(fmtOk).sort(byStart);
         const days = [];
@@ -4795,6 +4863,7 @@
         const nextLang = next ? [next.lang, ...next.formats].filter(Boolean).join(' · ') : '';
 
         view.innerHTML = `
+          <div class="uv-top">${viewHeaderHTML(ctx, null)}</div>
           <div class="uf-hero${film.backdrop ? '' : ' uf-hero--plain'}">
             ${film.backdrop ? `<div class="uf-backdrop" style="background-image:url('${esc(film.backdrop)}')"></div>` : ''}
             <button type="button" class="uf-poster"${film.trailerBtn ? ' title="Trailer abspielen"' : ' disabled'}>
@@ -4813,10 +4882,7 @@
             </div>
           </div>
           <div class="uv-sec">
-            <div class="uv-sec-head">
-              <div class="uv-h">Vorstellungen</div>
-              ${film.cinemaName ? `<button type="button" class="uv-cinema uv-cinema-pick" title="Kino wechseln">${pinIcon}${esc(film.cinemaName)}</button>` : ''}
-            </div>
+            <div class="uv-sec-head"><div class="uv-h">Vorstellungen</div></div>
             ${showtimesHTML()}
           </div>
           ${desc || facts.length ? `<div class="uv-sec uf-info">
@@ -4825,7 +4891,7 @@
                 <button type="button" class="uv-link uf-readmore" hidden>${state.descOpen ? 'Weniger' : 'Weiterlesen'}</button></div>` : ''}
             ${facts.length ? `<dl class="uf-facts">${facts.map((f) => `<div><dt>${esc(f.label)}</dt><dd>${esc(f.value)}</dd></div>`).join('')}</dl>` : ''}
           </div>` : ''}
-          <div class="uv-foot"><a href="${esc(film.programmeHref)}">← Ganzes Programm</a><span class="uv-native">Original-Ansicht zeigen</span></div>`;
+          <div class="uv-foot"><span class="uv-native">Original-Ansicht zeigen</span></div>`;
 
         view.querySelectorAll('[data-lang]').forEach((b) => {
           b.onclick = () => {
@@ -4843,7 +4909,7 @@
         if (film.trailerBtn) {
           view.querySelectorAll('.uf-poster, .uf-trailer').forEach((b) => { b.onclick = () => film.trailerBtn.click(); });
         }
-        view.querySelectorAll('.uv-cinema-pick').forEach((b) => { b.onclick = () => film.cinemaBtn && film.cinemaBtn.click(); });
+        wireCinemaPick(view, ctx);
         const text = view.querySelector('.uf-text'), more = view.querySelector('.uf-readmore');
         if (text && more) {
           more.hidden = !state.descOpen && text.scrollHeight <= text.clientHeight + 2;
@@ -4939,8 +5005,7 @@
       const cinemaPath = `${slug}/${siteId}`;
       const progHref = `/kinoprogramm/${cinemaPath}`;
       const sliders = parseHomeSliders();
-      const cinemaBtn = document.querySelector('[data-bs-target="#cinemaSelectModal"]');
-      const cinemaName = (document.querySelector('.page-content .cinema-select button [aria-hidden="true"]')?.textContent || '').trim();
+      const ctx = cinemaContext();
 
       injectViewStyle();
       const view = document.createElement('div');
@@ -4951,21 +5016,15 @@
       const filmById = new Map();
 
       view.innerHTML = `
-        <div class="uh-top">
-          <div>
-            <div class="uh-kicker">Dein Kino</div>
-            <button type="button" class="uh-cinema uv-cinema-pick" title="Kino wechseln">${esc(cinemaName || 'Kino wählen')} ${pinIcon}</button>
-          </div>
-          <a class="uh-all" href="${progHref}">Ganzes Programm <span aria-hidden="true">→</span></a>
-        </div>
+        <div class="uv-top">${viewHeaderHTML(ctx, 'home')}</div>
         <div class="uv-sec" id="uh-next"></div>
         <div class="uv-sec" id="uh-new" hidden></div>
         <div class="uv-sec" id="uh-presale" hidden></div>
         <div class="uv-sec" id="uh-events" hidden></div>
         <div class="uv-sec" id="uh-family" hidden></div>
-        <div class="uv-foot"><a href="${progHref}">Ganzes Programm</a><a href="/eventkalender">Eventkalender</a><span class="uv-native">Original-Ansicht zeigen</span></div>`;
+        <div class="uv-foot"><span class="uv-native">Original-Ansicht zeigen</span></div>`;
       const box = (id) => view.querySelector('#' + id);
-      view.querySelector('.uv-cinema-pick').onclick = () => cinemaBtn && cinemaBtn.click();
+      wireCinemaPick(view, ctx);
       wireNativeToggle(view);
 
       const filmHref = (c) => {
@@ -5006,23 +5065,20 @@
         const rows = list.map(({ s, f }) => {
           const inMin = s.date === todayStr() ? minutesOf(s.time) - nowMin : Infinity;
           const end = endTime(s, f.runtime);
-          const when = inMin <= 45 ? `in ${inMin} min` : end ? `bis ${end}` : '';
-          const kinds = SCREENING_KINDS.filter((k) => s.kinds.includes(k.kind));
+          // The same chip as on the programme and film pages: time,
+          // language and format, and the link to booking.
           const meta = [
+            inMin <= 45 ? `<span class="uh-soon">in ${inMin} min</span>` : '',
             s.auditorium && esc(hallName(s)),
-            s.lang && `<span class="uh-lang">${esc(s.lang)}</span>`,
-            ...s.formats.map((x) => `<span class="uh-fmt">${esc(x)}</span>`),
-            ...kinds.map((k) => `<span class="ub-badge ub-badge--${k.kind}">${esc(k.chip)}</span>`),
-            f.fresh && !f.fresh.upcoming ? '<span class="ub-badge ub-badge--new">Neu</span>' : '',
-          ].filter(Boolean).join('');
-          const book = bookingUrl(s);
-          return `<div class="uh-row${inMin <= 45 ? ' uh-row--soon' : ''}">
-              <a class="uh-time" href="${book}"><b>${s.time}</b>${when ? `<span>${when}</span>` : ''}</a>
+            end ? `bis ${end}` : '',
+          ].filter(Boolean).join('<i>·</i>');
+          const tip = `${dayWithDate(s.date)} ${s.time}${end ? ', Filmende ca. ' + end : ''}`;
+          return `<div class="uh-row">
+              ${chipMarkup(s, s.time, esc(tip))}
               <a class="uh-film" href="${esc(f.href || progHref)}">
                 ${f.poster ? `<img class="uh-thumb" src="${esc(f.poster)}" loading="lazy" alt="">` : '<span class="uh-thumb"></span>'}
-                <span class="uh-ftext"><span class="uh-title">${esc(f.title)}</span><span class="uh-meta">${meta}</span></span>
+                <span class="uh-ftext">${badgesHTML(f)}<span class="uh-title">${esc(f.title)}</span><span class="uh-meta">${meta}</span></span>
               </a>
-              <a class="uh-buy" href="${book}">Tickets</a>
             </div>`;
         }).join('');
         el.innerHTML = head(choices.length ? pills : '')
@@ -5166,40 +5222,39 @@
         box-shadow:0 2px 14px rgba(0,0,0,.25);overflow:hidden}
       :is(#uci-film,#uci-home) *{box-sizing:border-box}
       :is(#uci-film,#uci-home) a{color:inherit;text-decoration:none}
-      :is(#uci-film,#uci-home) button{font:inherit;min-height:0;margin:0}
+      /* font-family only: a font shorthand here (id specificity) would
+         override every button's own size and weight below. */
+      :is(#uci-film,#uci-home) button{font-family:inherit;min-height:0;margin:0}
       :is(#uci-film,#uci-home) p,:is(#uci-film,#uci-home) dl,:is(#uci-film,#uci-home) dd{margin:0}
 
-      .uv-sec{padding:18px 24px;border-top:1px solid rgba(255,255,255,.07)}
+      .uv-top{padding:16px}
+      .uv-sec{padding:16px;border-top:1px solid rgba(255,255,255,.07)}
       .uv-sec[hidden]{display:none}
       .uv-sec-head{display:flex;align-items:center;justify-content:space-between;gap:10px 16px;
         flex-wrap:wrap;margin-bottom:12px}
-      .uv-h{font-size:12px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;color:#fff101}
-      .uv-pills{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+      .uv-pills{display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+      /* Same as the programme's date tabs (.ub-tab). */
       .uv-pill{background:rgba(255,255,255,.06);border:1px solid transparent;color:#cfd6e0;
-        border-radius:999px;padding:4px 12px;font-size:12.5px;cursor:pointer;line-height:1.4}
+        border-radius:6px;padding:5px 8px;font-size:12.5px;cursor:pointer;line-height:1.45}
       .uv-pill:hover{background:rgba(255,255,255,.12)}
       .uv-pill.active{background:#fff101;color:#000;font-weight:700}
       .uv-check{display:flex;align-items:center;gap:6px;font-size:12.5px;color:#cfd6e0;
         margin:0 0 0 6px;accent-color:#fff101;cursor:pointer;white-space:nowrap}
       .uv-btn{display:inline-flex;align-items:center;gap:8px;background:rgba(255,255,255,.1);
-        color:#fff;border:1px solid rgba(255,255,255,.18);border-radius:8px;padding:9px 16px;
-        font-weight:700;font-size:13.5px;cursor:pointer}
+        color:#fff;border:1px solid rgba(255,255,255,.18);border-radius:6px;padding:8px 14px;
+        font-weight:700;font-size:13px;cursor:pointer}
       .uv-btn:hover{background:rgba(255,255,255,.18)}
-      :is(#uci-film,#uci-home) .uv-link{background:none;border:0;padding:0;color:#8fc4f0;font-size:12.5px;font-weight:600;cursor:pointer}
+      :is(#uci-film,#uci-home) .uv-link{background:none;border:0;padding:0;color:#8fc4f0;font-size:12px;font-weight:600;cursor:pointer}
       :is(#uci-film,#uci-home) .uv-link:hover{color:#b3dcff;text-decoration:underline}
       .uv-tag{display:inline-block;padding:1px 6px;border-radius:3px;font-size:9.5px;font-weight:700;
         line-height:1.3;letter-spacing:.03em;text-transform:uppercase;color:#cfd6e0;
         border:1px solid rgba(255,255,255,.3)}
-      .uv-cinema{display:inline-flex;align-items:center;gap:6px;background:none;border:0;padding:0;
-        color:#a9b4c2;font-size:12.5px;cursor:pointer;text-align:left}
-      .uv-cinema:hover{color:#fff}
-      .uv-cinema svg{color:#fff101;flex:0 0 auto}
-      .uv-empty{padding:22px 4px;color:#8b97a8;text-align:center;font-size:13px}
+            .uv-empty{padding:22px 4px;color:#8b97a8;text-align:center;font-size:13px}
       :is(#uci-film,#uci-home) .uv-empty a{color:#8fc4f0}
       .uv-empty .uv-btn{margin-top:12px}
-      .uv-foot{display:flex;justify-content:center;flex-wrap:wrap;gap:6px 18px;padding:14px 24px 18px;
+      .uv-foot{display:flex;justify-content:center;flex-wrap:wrap;gap:6px 18px;padding:12px 16px 16px;
         border-top:1px solid rgba(255,255,255,.07)}
-      :is(#uci-film,#uci-home) .uv-foot a,:is(#uci-film,#uci-home) .uv-foot span{font-size:11.5px;color:#6b7684;cursor:pointer}
+      :is(#uci-film,#uci-home) .uv-foot a,:is(#uci-film,#uci-home) .uv-foot span{font-size:11px;color:#6b7684;cursor:pointer}
       :is(#uci-film,#uci-home) .uv-foot a:hover,:is(#uci-film,#uci-home) .uv-foot span:hover{color:#a9b4c2;text-decoration:underline}
       #uci-browse-back{position:fixed;top:12px;left:12px;z-index:2147483647;
         background:#fff101;color:#000;border:0;border-radius:6px;padding:8px 14px;
@@ -5207,8 +5262,8 @@
 
       /* ---- film page ---- */
       #uci-film .uf-hero{position:relative;display:flex;align-items:flex-end;gap:24px;
-        padding:120px 24px 22px;min-height:300px;isolation:isolate}
-      #uci-film .uf-hero--plain{padding-top:28px;min-height:0}
+        padding:110px 16px 20px;min-height:290px;isolation:isolate}
+      #uci-film .uf-hero--plain{padding-top:8px;min-height:0}
       #uci-film .uf-backdrop{position:absolute;inset:0;z-index:-1;background-size:cover;
         background-position:center 30%}
       #uci-film .uf-backdrop::after{content:'';position:absolute;inset:0;
@@ -5232,7 +5287,7 @@
       #uci-film .uf-meta i{font-style:normal;color:#6b7684;margin:0 7px}
       #uci-film .uf-actions{display:flex;flex-wrap:wrap;align-items:stretch;gap:10px;margin-top:16px}
       #uci-film .uf-cta{display:flex;flex-direction:column;justify-content:center;background:#fff101;color:#000;
-        border-radius:8px;padding:6px 16px;line-height:1.25;box-shadow:0 4px 18px rgba(255,241,1,.18)}
+        border-radius:6px;padding:6px 16px;line-height:1.25;box-shadow:0 4px 18px rgba(255,241,1,.18)}
       #uci-film .uf-cta:hover{background:#fff64d}
       #uci-film .uf-cta-k{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;opacity:.65}
       #uci-film .uf-cta-v{font-size:15px;font-weight:800}
@@ -5250,9 +5305,7 @@
       #uci-film .uf-dlabel span{font-size:11.5px;color:#8b97a8}
       #uci-film .uf-day--today .uf-dlabel b{color:#fff101}
       #uci-film .uf-day--weekend .uf-dlabel span{color:#b9a960}
-      #uci-film .uf-chips{display:flex;flex-wrap:wrap;gap:6px}
-      #uci-film .chip{width:70px;min-height:40px}
-      #uci-film .chip-time{font-size:13px}
+      #uci-film .uf-chips{display:flex;flex-wrap:wrap;gap:5px}
       #uci-film .uf-alldays{margin-top:12px}
       #uci-film .uf-extras{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px}
       #uci-film .uf-extras span{font-size:10.5px;color:#a9b4c2;border:1px dashed rgba(255,255,255,.2);
@@ -5269,85 +5322,73 @@
       #uci-film .uf-facts dd{font-size:13px;color:#cfd6e0}
 
       /* ---- home page ---- */
-      #uci-home .uh-top{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;
-        padding:22px 24px 18px}
-      #uci-home .uh-kicker{font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#8b97a8}
-      #uci-home .uh-cinema{display:inline-flex;align-items:center;gap:8px;background:none;border:0;padding:0;
-        color:#fff;font-size:22px;font-weight:800;line-height:1.2;cursor:pointer;text-align:left}
-      #uci-home .uh-cinema svg{width:16px;height:16px;color:#fff101;flex:0 0 auto}
-      #uci-home .uh-cinema:hover{text-decoration:underline;text-decoration-color:rgba(255,241,1,.6)}
-      #uci-home .uh-all{flex:0 0 auto;background:#fff101;color:#000;font-weight:800;font-size:13.5px;
-        border-radius:8px;padding:9px 16px;white-space:nowrap}
-      #uci-home .uh-all:hover{background:#fff64d}
-
+      /* Rows like the programme's (.film-row): chip, poster, title, meta. */
       #uci-home .uh-list{display:flex;flex-direction:column}
-      #uci-home .uh-row{display:grid;grid-template-columns:64px minmax(0,1fr) auto;gap:14px;align-items:center;
-        padding:7px 6px;margin:0 -6px;border-radius:8px}
-      #uci-home .uh-row:hover{background:rgba(255,255,255,.04)}
-      #uci-home .uh-row + .uh-row{border-top:1px solid rgba(255,255,255,.05)}
-      #uci-home .uh-time{display:flex;flex-direction:column;line-height:1.15}
-      #uci-home .uh-time b{font-size:18px;font-weight:800;font-variant-numeric:tabular-nums}
-      #uci-home .uh-time span{font-size:10.5px;color:#8b97a8;white-space:nowrap}
-      #uci-home .uh-row--soon .uh-time span{color:#fff101;font-weight:700}
-      #uci-home .uh-film{display:flex;align-items:center;gap:12px;min-width:0}
-      #uci-home .uh-thumb{width:34px;height:48px;border-radius:4px;object-fit:cover;flex:0 0 auto;
+      #uci-home .uh-row{display:flex;align-items:center;gap:12px;padding:8px 2px;
+        border-bottom:1px solid rgba(255,255,255,.07)}
+      #uci-home .uh-row:last-child{border-bottom:0}
+      #uci-home .uh-row:hover{background:rgba(255,255,255,.03)}
+      #uci-home .uh-row .chip{flex:0 0 auto}
+      #uci-home .uh-film{display:flex;align-items:center;gap:12px;min-width:0;flex:1}
+      #uci-home .uh-thumb{width:40px;height:57px;border-radius:4px;object-fit:cover;flex:0 0 auto;
         background:rgba(255,255,255,.08)}
       #uci-home .uh-ftext,#uci-home .uh-etext{display:flex;flex-direction:column;min-width:0}
-      #uci-home .uh-title{font-weight:650;font-size:14px;line-height:1.3;white-space:nowrap;
+      #uci-home .uh-ftext .ub-badges{margin-bottom:3px}
+      #uci-home .uh-title{font-weight:600;font-size:13.5px;line-height:1.3;white-space:nowrap;
         overflow:hidden;text-overflow:ellipsis}
       #uci-home .uh-film:hover .uh-title{text-decoration:underline}
-      #uci-home .uh-meta{display:flex;flex-wrap:wrap;align-items:center;gap:3px 8px;font-size:11.5px;
-        color:#8b97a8;margin-top:2px}
-      #uci-home .uh-lang{color:#8fc4f0;font-weight:700}
-      #uci-home .uh-fmt{color:#e8dc6a;font-weight:600}
-      #uci-home .uh-buy{font-size:12px;font-weight:700;color:#fff101;border:1px solid rgba(255,241,1,.45);
-        border-radius:999px;padding:4px 12px;white-space:nowrap}
-      #uci-home .uh-buy:hover{background:#fff101;color:#000}
+      #uci-home .uh-meta{font-size:11px;color:#8b97a8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+      #uci-home .uh-meta i{font-style:normal;margin:0 5px;color:#5c6673}
+      #uci-home .uh-soon{color:#fff101;font-weight:700}
       #uci-home .uh-more{margin-top:10px}
-      /* About as tall as the 10 rows that replace it (62px each). */
+      /* About as tall as the 10 rows that replace it (74px each). */
       #uci-home .uh-skel{display:flex;flex-direction:column;gap:8px}
-      #uci-home .uh-skel div{height:54px;border-radius:8px;
+      #uci-home .uh-skel div{height:66px;border-radius:6px;
         background:linear-gradient(90deg,rgba(255,255,255,.04),rgba(255,255,255,.09),rgba(255,255,255,.04));
         background-size:200% 100%;animation:uh-shimmer 1.2s linear infinite}
       @keyframes uh-shimmer{to{background-position:-200% 0}}
 
-      #uci-home .uh-arrows{display:flex;align-items:center;gap:6px}
-      #uci-home .uh-arrows .uv-link{margin-right:6px}
-      #uci-home .uh-arrow{width:28px;height:28px;border-radius:50%;border:1px solid rgba(255,255,255,.18);
-        background:rgba(255,255,255,.06);color:#fff;font-size:17px;line-height:1;cursor:pointer;padding:0 0 2px}
-      #uci-home .uh-arrow:hover{background:rgba(255,255,255,.14)}
-      #uci-home .uh-scroller{display:grid;grid-auto-flow:column;grid-auto-columns:128px;gap:14px;
+      #uci-home .uh-arrows{display:flex;align-items:center;gap:4px}
+      #uci-home .uh-arrows .uv-link{margin-right:8px}
+      #uci-home .uh-arrow{width:28px;height:28px;border-radius:6px;border:1px solid transparent;
+        background:rgba(255,255,255,.06);color:#cfd6e0;font-size:16px;line-height:1;cursor:pointer;padding:0 0 2px}
+      #uci-home .uh-arrow:hover{background:rgba(255,255,255,.12);color:#fff}
+      #uci-home .uh-scroller{display:grid;grid-auto-flow:column;grid-auto-columns:120px;gap:12px;
         overflow-x:auto;scroll-snap-type:x proximity;padding:2px 2px 8px;margin:0 -2px;scrollbar-width:thin;
         scrollbar-color:rgba(255,255,255,.15) transparent}
       #uci-home .uh-card{display:flex;flex-direction:column;gap:6px;scroll-snap-align:start;background:none;
         border:0;padding:0;color:#fff;text-align:left;cursor:pointer;min-width:0}
-      #uci-home .uh-poster{position:relative;display:block;width:100%;aspect-ratio:200/283;border-radius:8px;
+      #uci-home .uh-poster{position:relative;display:block;width:100%;aspect-ratio:200/283;border-radius:6px;
         overflow:hidden;background:rgba(255,255,255,.06);box-shadow:0 0 0 1px rgba(255,255,255,.06)}
       #uci-home .uh-poster img{display:block;width:100%;height:100%;object-fit:cover;transition:transform .2s}
       #uci-home .uh-card:hover .uh-poster img{transform:scale(1.04)}
-      #uci-home .uh-flag{position:absolute;top:6px;left:6px;font-size:9.5px;font-weight:800;letter-spacing:.04em;
-        text-transform:uppercase;padding:2px 6px;border-radius:3px}
-      #uci-home .uh-flag--new{background:#fff101;color:#000}
-      #uci-home .uh-flag--start{background:rgba(16,20,28,.85);color:#fff101;border:1px solid rgba(255,241,1,.6)}
-      #uci-home .uh-ctitle{font-size:12.5px;font-weight:650;line-height:1.3;overflow:hidden;display:-webkit-box;
+      /* The .ub-badge look, placed on the poster. */
+      #uci-home .uh-flag{position:absolute;top:6px;left:6px;font-size:9.5px;font-weight:700;letter-spacing:.03em;
+        line-height:1.3;text-transform:uppercase;padding:1px 5px;border-radius:3px;border:1px solid}
+      #uci-home .uh-flag--new{background:#fff101;color:#000;border-color:#fff101}
+      #uci-home .uh-flag--start{background:rgba(16,20,28,.85);color:#fff101;border-color:rgba(255,241,1,.6)}
+      #uci-home .uh-ctitle{font-size:12.5px;font-weight:600;line-height:1.3;overflow:hidden;display:-webkit-box;
         -webkit-line-clamp:2;-webkit-box-orient:vertical}
       #uci-home .uh-csub{font-size:11px;color:#8b97a8;margin-top:-3px}
 
-      #uci-home .uh-events{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
-      #uci-home .uh-event{display:flex;align-items:center;gap:12px;padding:8px;border-radius:8px;
+      #uci-home .uh-events{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+      #uci-home .uh-event{display:flex;align-items:center;gap:12px;padding:8px;border-radius:6px;
         background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.06);color:#fff;text-align:left;
         cursor:pointer;min-width:0}
       #uci-home .uh-event:hover{background:rgba(255,255,255,.08)}
+      /* Event purple, as on the programme's Event badge and row edge. */
       #uci-home .uh-date{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:0 0 auto;
-        width:44px;height:44px;border-radius:7px;background:rgba(180,120,230,.14);border:1px solid rgba(180,120,230,.45);
+        width:42px;height:42px;border-radius:6px;background:rgba(180,120,230,.14);border:1px solid rgba(180,120,230,.45);
         line-height:1}
-      #uci-home .uh-date b{font-size:17px;font-weight:800}
+      #uci-home .uh-date b{font-size:16px;font-weight:800}
       #uci-home .uh-date span{font-size:9.5px;font-weight:700;text-transform:uppercase;color:#d3b2f2;margin-top:2px}
       #uci-home .uh-event .uh-title{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;
         -webkit-box-orient:vertical}
 
       @media (max-width: 640px) {
-        #uci-film,#uci-home{margin:12px auto 24px;border-radius:0}
+        /* An inset card, as the programme panel is on phones (it sits in
+           UCI's 16px-padded container; these two don't, hence the margin). */
+        #uci-film,#uci-home{width:auto;margin:24px 16px}
         .uv-sec{padding:16px}
         .uv-foot{padding:12px 16px 16px}
         #uci-film .uf-hero{padding:90px 16px 18px;gap:14px;align-items:flex-end;min-height:0}
@@ -5362,16 +5403,8 @@
         #uci-film .uv-btn{padding:8px 12px}
         #uci-film .uf-day{grid-template-columns:1fr;gap:6px}
         #uci-film .uf-dlabel{flex-direction:row;align-items:baseline;gap:8px}
-        #uci-film .uf-chips .chip{width:calc((100% - 18px) / 4)}
         #uci-film .uf-info{grid-template-columns:1fr;gap:18px}
-        #uci-home .uh-top{padding:16px;flex-direction:column;align-items:stretch}
-        #uci-home .uh-cinema{font-size:19px}
-        #uci-home .uh-all{text-align:center}
-        #uci-home .uh-row{grid-template-columns:52px minmax(0,1fr) auto;gap:10px}
-        #uci-home .uh-time b{font-size:16px}
-        #uci-home .uh-thumb{width:30px;height:43px}
-        #uci-home .uh-film{gap:9px}
-        #uci-home .uh-buy{padding:4px 9px;font-size:11.5px}
+        #uci-home .uh-row,#uci-home .uh-film{gap:10px}
         #uci-home .uh-arrow{display:none}
         #uci-home .uh-scroller{grid-auto-columns:112px;gap:12px;margin:0 -16px;padding:2px 16px 8px;
           scroll-padding:0 16px}
@@ -5388,6 +5421,7 @@
       document.head.appendChild(style);
 
       tidyNativeChrome();
+      progCtx = cinemaContext();
       grid.insertAdjacentElement('afterend', panel);
       enforceHidden();
       render();
