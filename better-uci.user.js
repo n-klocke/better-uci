@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         better-uci
 // @namespace    https://github.com/n-klocke/better-uci
-// @version      3.10.1
+// @version      3.10.2
 // @description  Batch-redeem UCI Unlimited cards on the booking page, a denser, filterable programme browser, and cleaner film and cinema home pages.
 // @author       n-klocke
 // @license      MIT
@@ -4599,12 +4599,13 @@
       const date = `${pad2(d.getDate())}.${pad2(d.getMonth() + 1)}.`;
       return off >= 0 && off < 2 ? `${dayShort(str)}, ${shortWd(d)} ${date}` : `${shortWd(d)} ${date}`;
     };
-    // Start plus runtime. UCI's ads and trailers come on top, so this is
-    // the earliest the film itself can end.
+    // Start, about 20 minutes of ads and trailers, then the runtime: an
+    // estimate of when the film ends, not UCI data.
+    const ADS_MIN = 20;
     function endTime(s, runtime) {
       const mins = parseInt(runtime, 10);
       if (!mins || !s.time) return null;
-      const t = minutesOf(s.time) + mins;
+      const t = minutesOf(s.time) + ADS_MIN + mins;
       return pad2(Math.floor(t / 60) % 24) + ':' + pad2(t % 60);
     }
     // "Kino 01 IMAX" → "Kino 1": the format gets its own tag next to it.
@@ -5161,7 +5162,7 @@
 
     const VIEW_STYLE = `
       #uci-film,#uci-home{max-width:960px;width:100%;margin:24px auto 40px;box-sizing:border-box;
-        font-size:14px;line-height:1.45;color:#fff;background:#10141c;border-radius:12px;
+        font-size:14px;line-height:1.45;color:#fff;background:#10141c;border-radius:10px;
         box-shadow:0 2px 14px rgba(0,0,0,.25);overflow:hidden}
       :is(#uci-film,#uci-home) *{box-sizing:border-box}
       :is(#uci-film,#uci-home) a{color:inherit;text-decoration:none}
@@ -5207,8 +5208,7 @@
       /* ---- film page ---- */
       #uci-film .uf-hero{position:relative;display:flex;align-items:flex-end;gap:24px;
         padding:120px 24px 22px;min-height:300px;isolation:isolate}
-      #uci-film .uf-hero--plain{padding-top:28px;min-height:0;
-        background:radial-gradient(ellipse at 15% 0%,rgba(255,241,1,.08),transparent 60%)}
+      #uci-film .uf-hero--plain{padding-top:28px;min-height:0}
       #uci-film .uf-backdrop{position:absolute;inset:0;z-index:-1;background-size:cover;
         background-position:center 30%}
       #uci-film .uf-backdrop::after{content:'';position:absolute;inset:0;
@@ -5270,7 +5270,7 @@
 
       /* ---- home page ---- */
       #uci-home .uh-top{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;
-        padding:22px 24px 18px;background:radial-gradient(ellipse at 0% 0%,rgba(255,241,1,.09),transparent 55%)}
+        padding:22px 24px 18px}
       #uci-home .uh-kicker{font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#8b97a8}
       #uci-home .uh-cinema{display:inline-flex;align-items:center;gap:8px;background:none;border:0;padding:0;
         color:#fff;font-size:22px;font-weight:800;line-height:1.2;cursor:pointer;text-align:left}

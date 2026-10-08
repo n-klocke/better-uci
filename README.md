@@ -93,8 +93,8 @@ view: the poster (click it for the trailer), runtime, FSK and genre, and a
 **Nächste Vorstellung** button straight to booking. Below that, every
 showing grouped by day, with **language** (Deutsch / OV / OmU) and
 **format** (IMAX, 3D, iSense, …) filters. Started showings disappear on
-their own. Hover a time for the hall and when the film ends (start plus
-runtime, without ads). Plot, director and cast come last.
+their own. Hover a time for the hall and roughly when the film ends (start,
+about 20 minutes of ads, then the runtime). Plot, director and cast come last.
 
 ## Cinema home page
 `/home/<kino>` becomes a "what's on" page for your cinema:
