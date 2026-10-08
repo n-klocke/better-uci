@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         better-uci
 // @namespace    https://github.com/n-klocke/better-uci
-// @version      3.9.5
-// @description  Batch-redeem UCI Unlimited cards on the booking page, and a denser, filterable programme browser on the kinoprogramm page.
+// @version      3.10.0
+// @description  Batch-redeem UCI Unlimited cards on the booking page, a denser, filterable programme browser, and cleaner film and cinema home pages.
 // @author       n-klocke
 // @license      MIT
 // @homepageURL  https://github.com/n-klocke/better-uci
@@ -3163,18 +3163,34 @@
     const TAG = '[uci-browse]';
     console.log(TAG, 'loaded', location.href);
 
-    // Hides the native programme before it can flash. Injected at
+    // Which page this is. The film page and the cinema home page get
+    // their own views (mountFilmPage, mountHomePage); everything else keeps
+    // the old behavior, where the programme view mounts wherever a
+    // .movies-grid shows up.
+    const pageKind = /^\/film\/[^/]+\/\d+/.test(location.pathname) ? 'film'
+      : /^\/home\/[^/]+/.test(location.pathname) ? 'home'
+      : 'programme';
+
+    // Hides the native page before it can flash. Injected at
     // document-start, into <html> if <head> doesn't exist yet, so it
     // applies the moment a matching element is parsed, independent of when
     // mount() gets to run.
+    const EARLY_HIDE = {
+      programme: `.movies-grid, [data-schedule-filters-wrapper],
+          .pimcore_area_keyvisual-kinowelt, .switch-tabs, #scheduleContainerVorverkauf`,
+      // Not the whole .col-md-10: the cinema picker modal lives in there
+      // too, and a modal inside a display:none parent can't show.
+      film: `.film-page > .keyvisual-detail, .film-page .film-container,
+          .film-page .col-md-10 > .title-legend, .film-page .film-schedule, .film-page > .mt-8`,
+      home: `main > .keyvisual-detail, .page-content > .film-slider-wrapper, .page-content > .weischer-banner`,
+    };
     (function hideEarly() {
       if (!document.documentElement) { setTimeout(hideEarly, 0); return; }
       const earlyStyle = document.createElement('style');
       // Off while html.ub-native is set ("Original-Ansicht zeigen"): with
       // !important, no inline style could bring the native page back.
       earlyStyle.textContent = `
-        html:not(.ub-native) :is(.movies-grid, [data-schedule-filters-wrapper],
-          .pimcore_area_keyvisual-kinowelt, .switch-tabs, #scheduleContainerVorverkauf)
+        html:not(.ub-native) :is(${EARLY_HIDE[pageKind]})
           { display: none !important; }
         #uci-browse-loading{padding:60px 20px;text-align:center;color:#8b97a8;font-size:13px}
         .ub-spinner{width:32px;height:32px;margin:0 auto 12px;border:3px solid rgba(255,255,255,.15);
@@ -3186,20 +3202,23 @@
     // document.body doesn't exist yet at true document-start either, so
     // this is on its own separate retry rather than assuming hideEarly's
     // timing covers it too — <html> and <body> don't appear at the same
-    // moment during parsing.
-    let spinner, spinnerTimeout;
+    // moment during parsing. Only on pages this script actually replaces:
+    // the @match covers the whole domain, and a spinner on, say, the shop
+    // or Cloudflare's check page would only ever time out.
+    let spinner = null, spinnerTimeout;
+    const wantsSpinner = pageKind !== 'programme' || /^\/(kinoprogramm|coming-soon)(\/|$)/.test(location.pathname);
     (function showSpinner() {
+      if (!wantsSpinner) return;
       if (!document.body) { setTimeout(showSpinner, 0); return; }
       spinner = document.createElement('div');
       spinner.id = 'uci-browse-loading';
-      spinner.innerHTML = '<div class="ub-spinner"></div>Lädt Kinoprogramm…';
-      // This @match covers the whole www.uci-kinowelt.de domain, not just
-      // kinoprogramm/coming-soon — most pages under it will never have
-      // .movies-grid at all, so this needs a hard timeout or it would spin
-      // forever on, say, the homepage or the shop.
+      spinner.innerHTML = '<div class="ub-spinner"></div>' + (pageKind === 'programme' ? 'Lädt Kinoprogramm…' : 'Lädt…');
       (document.querySelector('main') || document.body).prepend(spinner);
+      // Hard timeout in case mounting never happens (UCI changed its
+      // markup, or a programme URL without a .movies-grid).
       spinnerTimeout = setTimeout(() => spinner.remove(), 5000);
     })();
+    const hideSpinner = () => { clearTimeout(spinnerTimeout); if (spinner) spinner.remove(); };
 
     const PREF_KEY = 'uci_browse_prefs_v1';
     let prefs = { ovOnly: false, newOnly: false };
@@ -3285,21 +3304,26 @@
 
     // Every film's full detail — poster, runtime, FSK, every showtime — is
     // already in the DOM at load, individually hidden behind its own
-    // d-none wrapper. No network calls needed: just read it.
-    function parseCard(card) {
+    // d-none wrapper. No network calls needed: just read it. The film page
+    // uses the same markup for its own header (.film-container), so
+    // parseFilmInfo and parseShowtime serve both.
+    function parseFilmInfo(card) {
       const titleEl = card.querySelector('.film-container__description__text__eventtitle a, .film-container__description__text__eventtitle');
       const title = titleEl ? titleEl.textContent.trim() : null;
       if (!title) return null;
 
       // The first item is either UCI's "Neu" label (an .event-label) or
       // "N. Spielwoche"; neither belongs in the genre.
-      let runtime = null, genre = null, isNew = false;
+      let runtime = null, genre = null, isNew = false, week = null;
       card.querySelectorAll('.film-info li').forEach((li) => {
-        const t = li.textContent.trim();
+        const t = li.textContent.trim().replace(/\s+/g, ' ');
         if (/^\d+\s*min$/i.test(t)) runtime = t;
         else if (/^neu$/i.test(t)) isNew = true;
-        else if (!/spielwoche/i.test(t) && t) genre = genre ? genre + ', ' + t : t;
+        else if (/spielwoche/i.test(t)) week = t;
+        else if (t) genre = genre ? genre + ', ' + t : t;
       });
+      // Genre lists come with stray whitespace around the commas.
+      if (genre) genre = genre.replace(/\s*,\s*/g, ', ').replace(/,\s*$/, '');
 
       const fskImg = card.querySelector('.age-rating-info__icon img');
       const fsk = fskImg ? (fskImg.getAttribute('alt') || '').replace('FSK ', '') : null;
@@ -3310,50 +3334,58 @@
       const posterImg = card.querySelector('picture img, .film-poster img');
       const poster = smallSrc
         ? smallSrc.getAttribute('srcset').split(' ')[0]
-        : (posterImg ? posterImg.src : null);
+        : (posterImg ? posterImg.getAttribute('src') : null);
 
-      const showtimes = [...card.querySelectorAll('a.badge-performance[data-date]')].map((a) => {
-        const ids = performanceIds(a.getAttribute('href') || '');
-        if (!ids) return null;
-
-        // The language shows up TWICE in the markup: once as an attribute-*
-        // class (attribute-ov, attribute-omu…) and once as the visible
-        // subtext span read below. Without excluding the class here, it
-        // falls through the generic label fallback and produces a bogus
-        // "format" (e.g. "Ov") that duplicates the real language tag.
-        const LANG_ATTRS = new Set(['ov', 'omu', 'omeu', 'ome']);
-        const formats = [...a.classList]
-          .filter((c) => c.startsWith('attribute-') && c !== 'attribute')
-          .map((c) => c.replace('attribute-', ''))
-          .filter((raw) => !/^\d+$/.test(raw))          // numeric codes are internal, not a format
-          .filter((raw) => !LANG_ATTRS.has(raw.toLowerCase()))
-          .map((raw) => FORMAT_LABELS.hasOwnProperty(raw) ? FORMAT_LABELS[raw] : titleCase(raw))
-          .filter(Boolean);
-
-        const subtextEl = a.querySelector('.performance-badge__subtext');
-        const lang = subtextEl ? subtextEl.textContent.trim() : null;   // null = standard dub
-        const special = (a.dataset.special || '').trim();
-
-        // The numeric attribute-* codes, kept raw: a few mean something to
-        // us (see EVENT_CODES), most are unlabelled internal ones.
-        const codes = [...a.classList]
-          .filter((c) => /^attribute-\d+$/.test(c))
-          .map((c) => c.slice('attribute-'.length));
-
-        return {
-          time: a.dataset.time, date: a.dataset.date,
-          auditorium: a.dataset.trackingAuditorium || '',
-          perfId: ids.perfId, siteId: ids.siteId,
-          formats, lang, special, codes,
-        };
-      }).filter(Boolean);
-
-      if (!showtimes.length) return null;
       // The native card's title links to the film's own page (trailer,
       // description) — kept so our poster+title can link there too.
       const filmLink = card.querySelector('.film-container__description__text__eventtitle a');
       const href = filmLink ? filmLink.getAttribute('href') : null;
-      return { title, runtime, genre, fsk, poster, href, filmId: filmIdOf(href), isNew, showtimes };
+      return { title, runtime, genre, fsk, poster, href, filmId: filmIdOf(href), isNew, week };
+    }
+
+    // The language shows up TWICE in the markup: once as an attribute-*
+    // class (attribute-ov, attribute-omu…) and once as the visible
+    // subtext span read below. Without excluding the class here, it
+    // falls through the generic label fallback and produces a bogus
+    // "format" (e.g. "Ov") that duplicates the real language tag.
+    const LANG_ATTRS = new Set(['ov', 'omu', 'omeu', 'ome']);
+    function parseShowtime(a) {
+      const ids = performanceIds(a.getAttribute('href') || '');
+      if (!ids) return null;
+
+      const formats = [...a.classList]
+        .filter((c) => c.startsWith('attribute-') && c !== 'attribute')
+        .map((c) => c.replace('attribute-', ''))
+        .filter((raw) => !/^\d+$/.test(raw))          // numeric codes are internal, not a format
+        .filter((raw) => !LANG_ATTRS.has(raw.toLowerCase()))
+        .map((raw) => FORMAT_LABELS.hasOwnProperty(raw) ? FORMAT_LABELS[raw] : titleCase(raw))
+        .filter(Boolean);
+
+      const subtextEl = a.querySelector('.performance-badge__subtext');
+      const lang = subtextEl ? subtextEl.textContent.trim() : null;   // null = standard dub
+      const special = (a.dataset.special || '').trim();
+
+      // The numeric attribute-* codes, kept raw: a few mean something to
+      // us (see EVENT_CODES), most are unlabelled internal ones.
+      const codes = [...a.classList]
+        .filter((c) => /^attribute-\d+$/.test(c))
+        .map((c) => c.slice('attribute-'.length));
+
+      return {
+        time: a.dataset.time, date: a.dataset.date,
+        auditorium: a.dataset.trackingAuditorium || '',
+        perfId: ids.perfId, siteId: ids.siteId,
+        formats, lang, special, codes,
+      };
+    }
+
+    function parseCard(card) {
+      const info = parseFilmInfo(card);
+      if (!info) return null;
+      const showtimes = [...card.querySelectorAll('a.badge-performance[data-date]')]
+        .map(parseShowtime).filter(Boolean);
+      if (!showtimes.length) return null;
+      return Object.assign(info, { showtimes });
     }
 
     // The native page can list the same film in more than one container
@@ -3806,8 +3838,8 @@
     // The programme as render() shows it: films sorted, each showing's
     // kinds and each film's badges worked out, plus the 8-day window. Also
     // what the WebMCP tools read.
-    function programme() {
-      const films = collectFilms();
+    function programme(root) {
+      const films = collectFilms(root);
       films.sort((a, b) => a.title.localeCompare(b.title, 'de'));
 
       const today = new Date();
@@ -4135,17 +4167,17 @@
       #uci-browse .film-row.film-row--accent::before{content:'';position:absolute;left:-8px;
         top:6px;bottom:6px;width:3px;border-radius:2px;background:rgb(var(--accent))}
       #uci-browse .film-row.film-row--accent:hover{background:rgba(var(--accent),.07)}
-      #uci-browse .ub-badges{display:flex;flex-wrap:wrap;gap:4px;line-height:1;margin-bottom:3px}
-      #uci-browse .ub-badge{display:inline-block;padding:1px 5px;border-radius:3px;border:1px solid;
+      :is(#uci-browse,#uci-film,#uci-home) .ub-badges{display:flex;flex-wrap:wrap;gap:4px;line-height:1;margin-bottom:3px}
+      :is(#uci-browse,#uci-film,#uci-home) .ub-badge{display:inline-block;padding:1px 5px;border-radius:3px;border:1px solid;
         font-size:9.5px;font-weight:700;line-height:1.3;letter-spacing:.03em;text-transform:uppercase}
-      #uci-browse .ub-badge--new{background:#fff101;color:#000;border-color:#fff101}
-      #uci-browse .ub-badge--start{color:#fff101;border-color:rgba(255,241,1,.6)}
+      :is(#uci-browse,#uci-film,#uci-home) .ub-badge--new{background:#fff101;color:#000;border-color:#fff101}
+      :is(#uci-browse,#uci-film,#uci-home) .ub-badge--start{color:#fff101;border-color:rgba(255,241,1,.6)}
       /* Preview and Sneak: blue, like the OV chips. Event: purple.
          Midnight Movie: red. Women's Night: pink, as on UCI's own badge. */
-      #uci-browse .ub-badge--preview{background:rgba(79,157,222,.18);color:#8fc4f0;border-color:rgba(79,157,222,.6)}
-      #uci-browse .ub-badge--event{background:rgba(180,120,230,.16);color:#d3b2f2;border-color:rgba(180,120,230,.55)}
-      #uci-browse .ub-badge--midnight{background:rgba(230,70,70,.16);color:#f2a3a3;border-color:rgba(230,70,70,.6)}
-      #uci-browse .ub-badge--womens{background:rgba(235,110,170,.16);color:#f5b3d3;border-color:rgba(235,110,170,.6)}
+      :is(#uci-browse,#uci-film,#uci-home) .ub-badge--preview{background:rgba(79,157,222,.18);color:#8fc4f0;border-color:rgba(79,157,222,.6)}
+      :is(#uci-browse,#uci-film,#uci-home) .ub-badge--event{background:rgba(180,120,230,.16);color:#d3b2f2;border-color:rgba(180,120,230,.55)}
+      :is(#uci-browse,#uci-film,#uci-home) .ub-badge--midnight{background:rgba(230,70,70,.16);color:#f2a3a3;border-color:rgba(230,70,70,.6)}
+      :is(#uci-browse,#uci-film,#uci-home) .ub-badge--womens{background:rgba(235,110,170,.16);color:#f5b3d3;border-color:rgba(235,110,170,.6)}
       #uci-browse .film-meta{font-size:11px;color:#8b97a8;white-space:nowrap;
         overflow:hidden;text-overflow:ellipsis}
       #uci-browse .film-chips{display:flex;flex-wrap:wrap;gap:5px;flex:1;
@@ -4161,30 +4193,30 @@
          mirrored in CHIP_W/CHIP_GAP (weekChipLimit). Weitere's date chips
          need 78px ("28.3.27 17:00"), hence their own wider .chip--date.
          Anything longer ellipsizes — the full text is in the tooltip. */
-      #uci-browse .chip{display:flex;flex-direction:column;align-items:center;justify-content:center;
+      :is(#uci-browse,#uci-film,#uci-home) .chip{display:flex;flex-direction:column;align-items:center;justify-content:center;
         box-sizing:border-box;width:60px;min-height:34px;overflow:hidden;
         padding:3px;border-radius:6px;background:rgba(255,255,255,.08);
         border:1px solid rgba(255,255,255,.12);text-decoration:none;cursor:pointer;line-height:1.25}
-      #uci-browse .chip:hover{background:rgba(255,255,255,.16)}
-      #uci-browse .chip.chip--date{width:80px}
-      #uci-browse .chip-time,#uci-browse .chip-sub{max-width:100%;white-space:nowrap;
+      :is(#uci-browse,#uci-film,#uci-home) .chip:hover{background:rgba(255,255,255,.16)}
+      :is(#uci-browse,#uci-film,#uci-home) .chip.chip--date{width:80px}
+      :is(#uci-browse,#uci-film,#uci-home) .chip-time,:is(#uci-browse,#uci-film,#uci-home) .chip-sub{max-width:100%;white-space:nowrap;
         overflow:hidden;text-overflow:ellipsis}
-      #uci-browse .chip-time{font-size:11.5px;font-weight:700;color:#fff}
-      #uci-browse .chip-sub{font-size:9px;color:#a9b4c2}
-      #uci-browse .chip.premium{border-color:rgba(255,241,1,.5)}
-      #uci-browse .chip.lang-orig{background:rgba(79,157,222,.16);border-color:rgba(79,157,222,.4)}
-      #uci-browse .chip.lang-orig .chip-sub{color:#8fc4f0}
+      :is(#uci-browse,#uci-film,#uci-home) .chip-time{font-size:11.5px;font-weight:700;color:#fff}
+      :is(#uci-browse,#uci-film,#uci-home) .chip-sub{font-size:9px;color:#a9b4c2}
+      :is(#uci-browse,#uci-film,#uci-home) .chip.premium{border-color:rgba(255,241,1,.5)}
+      :is(#uci-browse,#uci-film,#uci-home) .chip.lang-orig{background:rgba(79,157,222,.16);border-color:rgba(79,157,222,.4)}
+      :is(#uci-browse,#uci-film,#uci-home) .chip.lang-orig .chip-sub{color:#8fc4f0}
       /* Screening kinds (SCREENING_KINDS): the chip's border in the kind's
          color, after .premium/.lang-orig so it wins over theirs. */
-      #uci-browse .chip.chip--preview{border-color:rgba(79,157,222,.9)}
-      #uci-browse .chip.chip--midnight{border-color:rgba(230,70,70,.85)}
-      #uci-browse .chip.chip--midnight .chip-sub{color:#f2a3a3}
-      #uci-browse .chip.chip--womens{border-color:rgba(235,110,170,.85)}
-      #uci-browse .chip.chip--womens .chip-sub{color:#f5b3d3}
+      :is(#uci-browse,#uci-film,#uci-home) .chip.chip--preview{border-color:rgba(79,157,222,.9)}
+      :is(#uci-browse,#uci-film,#uci-home) .chip.chip--midnight{border-color:rgba(230,70,70,.85)}
+      :is(#uci-browse,#uci-film,#uci-home) .chip.chip--midnight .chip-sub{color:#f2a3a3}
+      :is(#uci-browse,#uci-film,#uci-home) .chip.chip--womens{border-color:rgba(235,110,170,.85)}
+      :is(#uci-browse,#uci-film,#uci-home) .chip.chip--womens .chip-sub{color:#f5b3d3}
       /* Weekday/date prefix de-emphasized so the times are what the eye
          scans along a row; translucent white so it reads on both the grey
          and the blue (original-language) chip backgrounds. */
-      #uci-browse .chip-day{font-weight:500;color:rgba(255,255,255,.55)}
+      :is(#uci-browse,#uci-film,#uci-home) .chip-day{font-weight:500;color:rgba(255,255,255,.55)}
 
       /* "+N weitere" — deliberately text, not another chip: it isn't a
          showtime itself, and matching the chip shape/size would make it
@@ -4228,7 +4260,7 @@
         #uci-browse .film-chips { flex: 1 1 100%; min-height: 0; }
         /* Weitere's dated chips: three per line instead of two (measured:
            12 dates took 6 lines / 344px); widest label "28.3.27 17:00". */
-        #uci-browse .chip.chip--date { width: calc((100% - 10px) / 3); }
+        :is(#uci-browse,#uci-film,#uci-home) .chip.chip--date { width: calc((100% - 10px) / 3); }
         /* Demnächst: Buchen stays beside the title instead of taking a
            line of its own (measured: 119px rows). */
         #uci-browse .film-row.cs-row { flex-wrap: nowrap; }
@@ -4503,6 +4535,801 @@
       ]);
     }
 
+    // ================================================= film & home pages
+    // Two more views on www: the film page (one film, every showing at the
+    // selected cinema) and the cinema home page (what's on next, what's
+    // new, pre-sales, events). Both read the same showtime markup as the
+    // programme (parseFilmInfo/parseShowtime) and reuse its chips.
+    const esc = (v) => String(v == null ? '' : v)
+      .replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const parseYmd = (str) => new Date(+str.slice(0, 4), +str.slice(4, 6) - 1, +str.slice(6, 8));
+    const pad2 = (n) => String(n).padStart(2, '0');
+    const clockNow = () => { const n = new Date(); return pad2(n.getHours()) + ':' + pad2(n.getMinutes()); };
+    const minutesOf = (hm) => +hm.slice(0, 2) * 60 + +hm.slice(3, 5);
+    const todayStr = () => ymd(new Date());
+    // Not started yet. A showing from an earlier day can still be in the
+    // page's markup (it's cached), so the date counts too.
+    const notStarted = (s) => s.date > todayStr() || (s.date === todayStr() && s.time >= clockNow());
+    const byStart = (a, b) => (a.date + a.time).localeCompare(b.date + b.time);
+    function dayOffset(str) {
+      const t = new Date(); t.setHours(0, 0, 0, 0);
+      return Math.round((parseYmd(str) - t) / 864e5);
+    }
+    const LONG_WEEKDAY = new Intl.DateTimeFormat('de-DE', { weekday: 'long' });
+    const shortWd = (d) => WEEKDAY.format(d).replace('.', '');
+    // "Heute", "Morgen", "Fr" within the week, "16.12." after, "16.12.27"
+    // in another year.
+    function dayShort(str) {
+      const off = dayOffset(str), d = parseYmd(str);
+      if (off === 0) return 'Heute';
+      if (off === 1) return 'Morgen';
+      if (off > 1 && off < 7) return shortWd(d);
+      return `${pad2(d.getDate())}.${pad2(d.getMonth() + 1)}.` + (d.getFullYear() !== new Date().getFullYear() ? String(d.getFullYear()).slice(2) : '');
+    }
+    const dayWithDate = (str) => {
+      const off = dayOffset(str), d = parseYmd(str);
+      const date = `${pad2(d.getDate())}.${pad2(d.getMonth() + 1)}.`;
+      return off >= 0 && off < 2 ? `${dayShort(str)}, ${shortWd(d)} ${date}` : `${shortWd(d)} ${date}`;
+    };
+    // Start plus runtime. UCI's ads and trailers come on top, so this is
+    // the earliest the film itself can end.
+    function endTime(s, runtime) {
+      const mins = parseInt(runtime, 10);
+      if (!mins || !s.time) return null;
+      const t = minutesOf(s.time) + mins;
+      return pad2(Math.floor(t / 60) % 24) + ':' + pad2(t % 60);
+    }
+    // "Kino 01 IMAX" → "Kino 1": the format gets its own tag next to it.
+    const hallName = (s) => s.formats.reduce((name, f) =>
+      name.replace(new RegExp('\\s*\\b' + f.replace(/[^\w-]/g, '') + '\\b', 'i'), ''), s.auditorium)
+      .replace(/^Kino 0(\d)/, 'Kino $1').trim();
+    const withKinds = (s) => {
+      if (!s.kinds) s.kinds = SCREENING_KINDS.filter((k) => k.test(s)).map((k) => k.kind);
+      return s;
+    };
+    // /film/<slug>/<id> plus the cinema part, so the film page opens with
+    // that cinema's showtimes instead of asking for one.
+    const withCinema = (href, cinemaPath) =>
+      href && cinemaPath && /^\/film\/[^/]+\/\d+\/?$/.test(href) ? href.replace(/\/$/, '') + '/' + cinemaPath : href;
+    const pinIcon = '<svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" aria-hidden="true"><path d="M8 16s6-5.7 6-10A6 6 0 0 0 2 6c0 4.3 6 10 6 10m0-7a3 3 0 1 1 0-6 3 3 0 0 1 0 6"/></svg>';
+
+    // "Original-Ansicht zeigen" for these views: html.ub-native switches
+    // the early CSS off; the panel hides.
+    function wireNativeToggle(view) {
+      const link = view.querySelector('.uv-native');
+      if (!link) return;
+      link.onclick = () => {
+        document.documentElement.classList.add('ub-native');
+        view.style.display = 'none';
+        // Swiper measured its sliders while they were hidden (0px wide).
+        window.dispatchEvent(new Event('resize'));
+        const back = document.createElement('button');
+        back.id = 'uci-browse-back';
+        back.textContent = '← Zur modernen Ansicht';
+        back.onclick = () => {
+          back.remove();
+          document.documentElement.classList.remove('ub-native');
+          view.style.display = '';
+        };
+        document.body.appendChild(back);
+        window.scrollTo(0, 0);
+      };
+    }
+
+    // Reveals the native page when a view can't mount, so a markup change
+    // on UCI's side leaves the original page, not an empty one.
+    function giveUp(why) {
+      console.warn(TAG, why, '- showing the original page');
+      document.documentElement.classList.add('ub-native');
+      hideSpinner();
+    }
+
+    // -------------------------------------------------------------- film
+    function parseFilmPage() {
+      const page = document.querySelector('.film-page');
+      const box = page && page.querySelector('.film-container');
+      const info = box && parseFilmInfo(box);
+      if (!info) return null;
+      const col = box.parentElement;
+
+      const seen = new Set();
+      const showtimes = [...col.querySelectorAll('.film-schedule a.badge-performance[data-date]')]
+        .map(parseShowtime)
+        .filter((s) => s && !seen.has(s.perfId) && seen.add(s.perfId))
+        .map(withKinds);
+
+      const img = box.querySelector('.film-poster img');
+      const facts = [...box.querySelectorAll('.film-description__row')].map((r) => ({
+        label: (r.querySelector('dt')?.textContent || '').trim(),
+        value: (r.querySelector('dd')?.textContent || '').trim(),
+      })).filter((f) => f.label && f.value);
+
+      // The 1440px banner (shown from 1200px up natively): wide enough for
+      // the 960px panel, without pulling the 2200px one.
+      const sources = [...page.querySelectorAll(':scope > .keyvisual-detail source[type="image/jpeg"]')]
+        .map((x) => ({ w: +x.getAttribute('width') || 0, url: (x.getAttribute('srcset') || '').split(' ')[0] }))
+        .filter((x) => x.url);
+      const backdrop = (sources.find((x) => x.w === 1440) || sources.sort((a, b) => b.w - a.w)[0] || {}).url || null;
+
+      // Numeric attribute codes the schedule's legend names (INFINITY
+      // VISION, GRETA APP, Women´s Night…), for the chip tooltips.
+      const extras = new Map();
+      col.querySelectorAll('.film-schedule [data-attribute-badge]').forEach((el) => {
+        extras.set(el.dataset.attributeBadge, {
+          label: el.textContent.trim().replace(/\s+/g, ' '),
+          tip: (el.getAttribute('data-bs-title') || '').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim(),
+        });
+      });
+
+      const cinemaBtn = col.querySelector('.cinema-select button') || document.querySelector('[data-bs-target="#cinemaSelectModal"]');
+      const cinemaName = (col.querySelector('.cinema-select button [aria-hidden="true"]')?.textContent || '').trim();
+      const m = location.pathname.match(/^\/film\/[^/]+\/\d+\/([^/]+)\/(\d+)/);
+      return Object.assign(info, {
+        showtimes, facts, backdrop, extras, cinemaBtn, cinemaName,
+        posterSrc: img ? img.getAttribute('src') : info.poster,
+        posterSrcset: img ? img.getAttribute('srcset') : null,
+        fskText: (box.querySelector('.age-rating-info__title')?.textContent || '').trim(),
+        trailerBtn: page.querySelector('.trailerplayer-trigger'),
+        hasSchedule: !!col.querySelector('.film-schedule'),
+        programmeHref: m ? `/kinoprogramm/${m[1]}/${m[2]}` : '/kinoprogramm',
+      });
+    }
+
+    function mountFilmPage() {
+      const film = parseFilmPage();
+      if (!film) { giveUp('film page: no .film-container'); return; }
+      const page = document.querySelector('.film-page');
+      injectViewStyle();
+      const view = document.createElement('div');
+      view.id = 'uci-film';
+      page.insertBefore(view, page.querySelector(':scope > .keyvisual-detail') || page.firstChild);
+
+      const all = film.showtimes;
+      const origLangs = [...new Set(all.filter((s) => isOriginalLanguage(s.lang)).map((s) => s.lang))];
+      const hasDub = all.some((s) => !isOriginalLanguage(s.lang));
+      const langChoice = origLangs.length && hasDub;
+      const fmtOptions = [...new Set(all.flatMap((s) => s.formats.length ? s.formats : ['Standard']))]
+        .sort((a, b) => (a === 'Standard') - (b === 'Standard') || a.localeCompare(b));
+      const state = {
+        lang: langChoice && prefs.ovOnly ? 'orig' : 'all',
+        fmt: 'all',
+        allDays: false,
+        descOpen: false,
+      };
+      const langOk = (s) => state.lang === 'all' || (state.lang === 'orig') === isOriginalLanguage(s.lang);
+      const fmtOk = (s) => state.fmt === 'all'
+        || (state.fmt === 'Standard' ? !s.formats.length : s.formats.includes(state.fmt));
+      const fact = (label) => (film.facts.find((f) => f.label === label) || {}).value;
+      const DAYS_SHOWN = 7;
+
+      function chip(s) {
+        const end = endTime(s, film.runtime);
+        const extra = s.codes.map((c) => film.extras.get(c)).filter(Boolean).map((x) => x.label);
+        const tip = `${dayWithDate(s.date)} ${s.time}${end ? ', Filmende ca. ' + end : ''}${extra.length ? ' · ' + extra.join(', ') : ''}`;
+        return chipMarkup(s, s.time, esc(tip));
+      }
+
+      function pill(group, value, label, active) {
+        return `<button type="button" class="uv-pill${active ? ' active' : ''}" data-${group}="${esc(value)}">${esc(label)}</button>`;
+      }
+
+      function showtimesHTML() {
+        if (!all.length) {
+          return `<div class="uv-empty">${film.hasSchedule
+            ? 'Für dieses Kino sind gerade keine Vorstellungen geplant.'
+            : 'Wähle ein Kino, um die Vorstellungen zu sehen.'}
+            ${film.cinemaBtn ? '<br><button type="button" class="uv-btn uv-cinema-pick">Kino wählen</button>' : ''}</div>`;
+        }
+        const shown = all.filter(notStarted).filter(langOk).filter(fmtOk).sort(byStart);
+        const days = [];
+        shown.forEach((s) => {
+          const last = days[days.length - 1];
+          if (last && last.date === s.date) last.shows.push(s);
+          else days.push({ date: s.date, shows: [s] });
+        });
+        const visible = state.allDays ? days : days.slice(0, DAYS_SHOWN);
+        const rows = visible.map(({ date, shows }) => {
+          const d = parseYmd(date), off = dayOffset(date);
+          const top = off === 0 ? 'Heute' : off === 1 ? 'Morgen' : LONG_WEEKDAY.format(d);
+          const sub = `${off < 2 ? shortWd(d) + ' ' : ''}${pad2(d.getDate())}.${pad2(d.getMonth() + 1)}.`
+            + (d.getFullYear() !== new Date().getFullYear() ? String(d.getFullYear()).slice(2) : '');
+          const weekend = d.getDay() === 0 || d.getDay() === 6;
+          return `<div class="uf-day${off === 0 ? ' uf-day--today' : ''}${weekend ? ' uf-day--weekend' : ''}">
+              <div class="uf-dlabel"><b>${top}</b><span>${sub}</span></div>
+              <div class="uf-chips">${shows.map(chip).join('')}</div>
+            </div>`;
+        }).join('');
+        const filters = [
+          langChoice ? `<div class="uv-pills">${pill('lang', 'all', 'Alle Sprachen', state.lang === 'all')}${pill('lang', 'de', 'Deutsch', state.lang === 'de')}${pill('lang', 'orig', origLangs.join(' / '), state.lang === 'orig')}</div>` : '',
+          fmtOptions.length > 1 ? `<div class="uv-pills">${pill('fmt', 'all', 'Alle Formate', state.fmt === 'all')}${fmtOptions.map((f) => pill('fmt', f, f === 'Standard' ? '2D' : f, state.fmt === f)).join('')}</div>` : '',
+        ].join('');
+        const usedExtras = [...new Set(all.flatMap((s) => s.codes))].map((c) => film.extras.get(c)).filter(Boolean);
+        const empty = !all.some(notStarted) ? 'Keine weiteren Vorstellungen.' : 'Keine Vorstellungen mit diesem Filter.';
+        return `${filters ? `<div class="uf-filters">${filters}</div>` : ''}
+          <div class="uf-days">${rows || `<div class="uv-empty">${empty}</div>`}</div>
+          ${days.length > DAYS_SHOWN ? `<button type="button" class="uv-link uf-alldays">${state.allDays ? 'Weniger Tage' : `Alle ${days.length} Tage anzeigen`}</button>` : ''}
+          ${usedExtras.length ? `<div class="uf-extras">${usedExtras.map((x) => `<span title="${esc(x.tip)}">${esc(x.label)}</span>`).join('')}</div>` : ''}`;
+      }
+
+      function render() {
+        const next = all.filter(notStarted).filter(langOk).filter(fmtOk).sort(byStart)[0];
+        const badges = [
+          film.isNew ? '<span class="ub-badge ub-badge--new">Neu</span>' : '',
+          film.week ? `<span class="uv-tag">${esc(film.week)}</span>` : '',
+        ].join('');
+        const meta = [film.runtime && film.runtime.replace(/(\d)\s*min/, '$1 min'), film.fsk && 'FSK ' + film.fsk,
+          film.genre, fact('Land')].filter(Boolean).map(esc).join('<i>·</i>');
+        const desc = fact('Beschreibung');
+        const facts = film.facts.filter((f) => f.label !== 'Beschreibung');
+        // Only with a real rating: "FSK noch nicht bekannt" is in the meta line already.
+        if (film.fskText && /^\d+$/.test(film.fsk || '')) facts.push({ label: 'Freigabe', value: film.fskText });
+        const nextLang = next ? [next.lang, ...next.formats].filter(Boolean).join(' · ') : '';
+
+        view.innerHTML = `
+          <div class="uf-hero${film.backdrop ? '' : ' uf-hero--plain'}">
+            ${film.backdrop ? `<div class="uf-backdrop" style="background-image:url('${esc(film.backdrop)}')"></div>` : ''}
+            <button type="button" class="uf-poster"${film.trailerBtn ? ' title="Trailer abspielen"' : ' disabled'}>
+              ${film.posterSrc ? `<img src="${esc(film.posterSrc)}"${film.posterSrcset ? ` srcset="${esc(film.posterSrcset)}"` : ''} alt="">` : ''}
+              ${film.trailerBtn ? '<span class="uf-play" aria-hidden="true"></span>' : ''}
+            </button>
+            <div class="uf-head">
+              ${badges ? `<div class="ub-badges">${badges}</div>` : ''}
+              <div class="uf-title">${esc(film.title)}</div>
+              ${meta ? `<div class="uf-meta">${meta}</div>` : ''}
+              <div class="uf-actions">
+                ${next ? `<a class="uf-cta" href="${bookingUrl(next)}"><span class="uf-cta-k">Nächste Vorstellung</span>
+                    <span class="uf-cta-v">${dayShort(next.date)} ${next.time}${nextLang ? ` <em>${esc(nextLang)}</em>` : ''}</span></a>` : ''}
+                ${film.trailerBtn ? '<button type="button" class="uv-btn uf-trailer"><span class="uf-tri"></span>Trailer</button>' : ''}
+              </div>
+            </div>
+          </div>
+          <div class="uv-sec">
+            <div class="uv-sec-head">
+              <div class="uv-h">Vorstellungen</div>
+              ${film.cinemaName ? `<button type="button" class="uv-cinema uv-cinema-pick" title="Kino wechseln">${pinIcon}${esc(film.cinemaName)}</button>` : ''}
+            </div>
+            ${showtimesHTML()}
+          </div>
+          ${desc || facts.length ? `<div class="uv-sec uf-info">
+            ${desc ? `<div class="uf-desc"><div class="uv-h">Handlung</div>
+                <p class="uf-text${state.descOpen ? ' open' : ''}">${esc(desc)}</p>
+                <button type="button" class="uv-link uf-readmore" hidden>${state.descOpen ? 'Weniger' : 'Weiterlesen'}</button></div>` : ''}
+            ${facts.length ? `<dl class="uf-facts">${facts.map((f) => `<div><dt>${esc(f.label)}</dt><dd>${esc(f.value)}</dd></div>`).join('')}</dl>` : ''}
+          </div>` : ''}
+          <div class="uv-foot"><a href="${esc(film.programmeHref)}">← Ganzes Programm</a><span class="uv-native">Original-Ansicht zeigen</span></div>`;
+
+        view.querySelectorAll('[data-lang]').forEach((b) => {
+          b.onclick = () => {
+            state.lang = b.dataset.lang;
+            prefs.ovOnly = state.lang === 'orig'; savePrefs();
+            render();
+          };
+        });
+        view.querySelectorAll('[data-fmt]').forEach((b) => { b.onclick = () => { state.fmt = b.dataset.fmt; render(); }; });
+        const allDays = view.querySelector('.uf-alldays');
+        if (allDays) allDays.onclick = () => { state.allDays = !state.allDays; render(); };
+        // The native trailer and cinema buttons open Bootstrap modals
+        // through a delegated click handler, so a click on the (hidden)
+        // original still works.
+        if (film.trailerBtn) {
+          view.querySelectorAll('.uf-poster, .uf-trailer').forEach((b) => { b.onclick = () => film.trailerBtn.click(); });
+        }
+        view.querySelectorAll('.uv-cinema-pick').forEach((b) => { b.onclick = () => film.cinemaBtn && film.cinemaBtn.click(); });
+        const text = view.querySelector('.uf-text'), more = view.querySelector('.uf-readmore');
+        if (text && more) {
+          more.hidden = !state.descOpen && text.scrollHeight <= text.clientHeight + 2;
+          more.onclick = () => { state.descOpen = !state.descOpen; render(); };
+        }
+        wireNativeToggle(view);
+      }
+
+      render();
+      hideSpinner();
+      // Started showings drop off without a reload.
+      setInterval(() => { if (view.isConnected && view.style.display !== 'none') render(); }, 60000);
+      console.log(TAG, 'film page mounted:', film.title, all.length, 'showings');
+    }
+
+    // -------------------------------------------------------------- home
+    const MONTHS = { jan: 0, feb: 1, mär: 2, mrz: 2, apr: 3, mai: 4, jun: 5, jul: 6, aug: 7, sep: 8, okt: 9, nov: 10, dez: 11 };
+    // "Heute", "Ab dem 16. Dez" → YYYYMMDD. The label has no year, and the
+    // sliders only list current and future dates, so a month before this
+    // one means next year.
+    function sliderDate(label) {
+      if (/^heute$/i.test(label)) return todayStr();
+      if (/^morgen$/i.test(label)) { const d = new Date(); d.setDate(d.getDate() + 1); return ymd(d); }
+      const m = label.match(/(\d{1,2})\.\s*([a-zäöü]{3})/i);
+      const mon = m ? MONTHS[m[2].toLowerCase()] : undefined;
+      if (mon === undefined) return null;
+      const now = new Date();
+      return ymd(new Date(now.getFullYear() + (mon < now.getMonth() ? 1 : 0), mon, +m[1]));
+    }
+
+    function parseSliderCard(slide) {
+      const card = slide.querySelector('.film-card');
+      const title = card && (card.querySelector('.title')?.textContent || '').trim().replace(/\s+/g, ' ');
+      if (!title) return null;
+      const src = card.querySelector('picture source[width="200"][type="image/jpeg"]') || card.querySelector('picture source[width="200"]');
+      const img = card.querySelector('picture img');
+      const dateLabel = (card.querySelector('.performance-date')?.textContent || '').trim().replace(/\s+/g, ' ');
+      const link = card.querySelector('a[href*="/film/"]');
+      return {
+        title, dateLabel, date: sliderDate(dateLabel),
+        filmId: slide.dataset.slideFilmid || null,
+        poster: src ? src.getAttribute('srcset').split(' ')[0] : (img ? img.getAttribute('src') : null),
+        href: link ? link.getAttribute('href') : null,
+        hiddenBtn: slide.querySelector('button.visually-hidden-focusable'),
+      };
+    }
+
+    // The home page's sliders, told apart by their headings (no other
+    // marker): Aktuelles Programm, Vorverkauf, UCI Events, original
+    // language, Familien- & Kinderkino. Swiper may clone slides for
+    // looping, hence the dedupe.
+    function parseHomeSliders() {
+      const out = {};
+      document.querySelectorAll('.page-content > .film-slider-wrapper').forEach((w) => {
+        const head = (w.querySelector('.title-legend')?.textContent || '').replace(/\s+/g, ' ').trim();
+        const key = /^Vorverkauf/i.test(head) ? 'presale' : /^UCI Events/i.test(head) ? 'events'
+          : /Familien|Kinder/i.test(head) ? 'family' : /^Aktuelles Programm/i.test(head) ? 'current' : null;
+        if (!key || out[key]) return;
+        const seen = new Set();
+        out[key] = [...w.querySelectorAll('.swiper-slide[data-slide-filmid]')]
+          .filter((sl) => !sl.classList.contains('swiper-slide-duplicate'))
+          .map(parseSliderCard)
+          .filter((c) => c && !seen.has(c.filmId || c.title) && seen.add(c.filmId || c.title));
+      });
+      return out;
+    }
+
+    function mountHomePage() {
+      const slug = (location.pathname.match(/^\/home\/([^/]+)/) || [])[1];
+      const siteId = document.querySelector('.film-slider-wrapper[data-site-id]')?.dataset.siteId;
+      const content = document.querySelector('main .page-content');
+      if (!slug || !siteId || !content) { giveUp('home page: no cinema or no .page-content'); return; }
+      const cinemaPath = `${slug}/${siteId}`;
+      const progHref = `/kinoprogramm/${cinemaPath}`;
+      const sliders = parseHomeSliders();
+      const cinemaBtn = document.querySelector('[data-bs-target="#cinemaSelectModal"]');
+      const cinemaName = (document.querySelector('.page-content .cinema-select button [aria-hidden="true"]')?.textContent || '').trim();
+
+      injectViewStyle();
+      const view = document.createElement('div');
+      view.id = 'uci-home';
+      content.parentElement.insertBefore(view, content);
+
+      const state = { load: 'loading', films: [], day: null, expanded: false };
+      const filmById = new Map();
+
+      view.innerHTML = `
+        <div class="uh-top">
+          <div>
+            <div class="uh-kicker">Dein Kino</div>
+            <button type="button" class="uh-cinema uv-cinema-pick" title="Kino wechseln">${esc(cinemaName || 'Kino wählen')} ${pinIcon}</button>
+          </div>
+          <a class="uh-all" href="${progHref}">Ganzes Programm <span aria-hidden="true">→</span></a>
+        </div>
+        <div class="uv-sec" id="uh-next"></div>
+        <div class="uv-sec" id="uh-new" hidden></div>
+        <div class="uv-sec" id="uh-presale" hidden></div>
+        <div class="uv-sec" id="uh-events" hidden></div>
+        <div class="uv-sec" id="uh-family" hidden></div>
+        <div class="uv-foot"><a href="${progHref}">Ganzes Programm</a><a href="/eventkalender">Eventkalender</a><span class="uv-native">Original-Ansicht zeigen</span></div>`;
+      const box = (id) => view.querySelector('#' + id);
+      view.querySelector('.uv-cinema-pick').onclick = () => cinemaBtn && cinemaBtn.click();
+      wireNativeToggle(view);
+
+      const filmHref = (c) => {
+        if (c.href) return withCinema(c.href, cinemaPath);
+        const f = c.filmId && filmById.get(c.filmId);
+        return f ? f.href : null;
+      };
+
+      // ---- Als Nächstes: every film's showings, merged into one timeline
+      function dayChoices() {
+        const dates = [...new Set(state.films.flatMap((f) => f.showtimes.filter(notStarted).map((s) => s.date)))].sort();
+        return dates.slice(0, 3);
+      }
+      function renderNext() {
+        const el = box('uh-next');
+        const head = (pills) => `<div class="uv-sec-head"><div class="uv-h">Als Nächstes</div>${pills}</div>`;
+        if (state.load === 'loading') {
+          el.innerHTML = head('') + '<div class="uh-skel">' + '<div></div>'.repeat(4) + '</div>';
+          return;
+        }
+        if (state.load === 'error') {
+          el.innerHTML = head('') + `<div class="uv-empty">Das Programm konnte nicht geladen werden.<br><a href="${progHref}">Programm öffnen</a></div>`;
+          return;
+        }
+        const choices = dayChoices();
+        if (!choices.includes(state.day)) { state.day = choices[0] || null; state.expanded = false; }
+        const pills = `<div class="uv-pills">${choices.map((d) =>
+          `<button type="button" class="uv-pill${d === state.day ? ' active' : ''}" data-day="${d}">${dayShort(d)}</button>`).join('')}
+          <label class="uv-check"><input type="checkbox" class="uh-ov"${prefs.ovOnly ? ' checked' : ''}> Nur OV</label></div>`;
+        const shows = state.films.flatMap((f) => f.showtimes
+          .filter((s) => s.date === state.day && notStarted(s))
+          .filter((s) => !prefs.ovOnly || isOriginalLanguage(s.lang))
+          .map((s) => ({ s, f })))
+          .sort((a, b) => byStart(a.s, b.s));
+        const LIMIT = 10;
+        const list = state.expanded ? shows : shows.slice(0, LIMIT);
+        const nowMin = minutesOf(clockNow());
+        const rows = list.map(({ s, f }) => {
+          const inMin = s.date === todayStr() ? minutesOf(s.time) - nowMin : Infinity;
+          const end = endTime(s, f.runtime);
+          const when = inMin <= 45 ? `in ${inMin} min` : end ? `bis ${end}` : '';
+          const kinds = SCREENING_KINDS.filter((k) => s.kinds.includes(k.kind));
+          const meta = [
+            s.auditorium && esc(hallName(s)),
+            s.lang && `<span class="uh-lang">${esc(s.lang)}</span>`,
+            ...s.formats.map((x) => `<span class="uh-fmt">${esc(x)}</span>`),
+            ...kinds.map((k) => `<span class="ub-badge ub-badge--${k.kind}">${esc(k.chip)}</span>`),
+            f.fresh && !f.fresh.upcoming ? '<span class="ub-badge ub-badge--new">Neu</span>' : '',
+          ].filter(Boolean).join('');
+          const book = bookingUrl(s);
+          return `<div class="uh-row${inMin <= 45 ? ' uh-row--soon' : ''}">
+              <a class="uh-time" href="${book}"><b>${s.time}</b>${when ? `<span>${when}</span>` : ''}</a>
+              <a class="uh-film" href="${esc(f.href || progHref)}">
+                ${f.poster ? `<img class="uh-thumb" src="${esc(f.poster)}" loading="lazy" alt="">` : '<span class="uh-thumb"></span>'}
+                <span class="uh-ftext"><span class="uh-title">${esc(f.title)}</span><span class="uh-meta">${meta}</span></span>
+              </a>
+              <a class="uh-buy" href="${book}">Tickets</a>
+            </div>`;
+        }).join('');
+        el.innerHTML = head(choices.length ? pills : '')
+          + (rows ? `<div class="uh-list">${rows}</div>` : `<div class="uv-empty">${state.day
+            ? 'Keine Vorstellungen' + (prefs.ovOnly ? ' in OV' : '') + '.' : 'Gerade keine Vorstellungen geplant.'}</div>`)
+          + (shows.length > LIMIT ? `<button type="button" class="uv-link uh-more">${state.expanded ? 'Weniger' : `Alle ${shows.length} Vorstellungen`}</button>` : '');
+        el.querySelectorAll('[data-day]').forEach((b) => { b.onclick = () => { state.day = b.dataset.day; state.expanded = false; renderNext(); }; });
+        const ov = el.querySelector('.uh-ov');
+        if (ov) ov.onchange = () => { prefs.ovOnly = ov.checked; savePrefs(); renderNext(); };
+        const more = el.querySelector('.uh-more');
+        if (more) more.onclick = () => { state.expanded = !state.expanded; renderNext(); };
+      }
+
+      // ---- poster rows (Neu, Vorverkauf, Familie) and the event list
+      function scroller(id, title, cards, link) {
+        const el = box(id);
+        el.hidden = !cards.length;
+        if (!cards.length) return;
+        el.innerHTML = `<div class="uv-sec-head"><div class="uv-h">${title}</div>
+            <div class="uh-arrows">${link ? `<a class="uv-link" href="${link.href}">${link.label}</a>` : ''}
+              <button type="button" class="uh-arrow" data-dir="-1" aria-label="Zurück">‹</button>
+              <button type="button" class="uh-arrow" data-dir="1" aria-label="Weiter">›</button></div></div>
+          <div class="uh-scroller">${cards.map((c) => {
+            const inner = `<span class="uh-poster">${c.poster ? `<img src="${esc(c.poster)}" loading="lazy" alt="">` : ''}
+                ${c.flag ? `<span class="uh-flag uh-flag--${c.flag.kind}">${esc(c.flag.label)}</span>` : ''}</span>
+              <span class="uh-ctitle" title="${esc(c.title)}">${esc(c.title)}</span>
+              ${c.sub ? `<span class="uh-csub">${esc(c.sub)}</span>` : ''}`;
+            return c.href ? `<a class="uh-card" href="${esc(c.href)}">${inner}</a>`
+              : `<button type="button" class="uh-card" data-idx="${cards.indexOf(c)}">${inner}</button>`;
+          }).join('')}</div>`;
+        const sc = el.querySelector('.uh-scroller');
+        el.querySelectorAll('.uh-arrow').forEach((b) => {
+          b.onclick = () => sc.scrollBy({ left: +b.dataset.dir * sc.clientWidth * 0.8, behavior: 'smooth' });
+        });
+        // No film link known: the native card's own (hidden) details button.
+        el.querySelectorAll('button.uh-card').forEach((b) => {
+          b.onclick = () => { const c = cards[+b.dataset.idx]; if (c.hiddenBtn) c.hiddenBtn.click(); };
+        });
+      }
+      const fromLabel = (c) => !c.date ? c.dateLabel : c.date <= todayStr() ? 'Jetzt im Kino' : `ab ${dayShort(c.date)}`;
+      const byDate = (a, b) => (a.date || '99999999').localeCompare(b.date || '99999999');
+
+      function renderNew() {
+        const fresh = state.films.filter((f) => f.fresh)
+          .sort((a, b) => (!!a.fresh.upcoming - !!b.fresh.upcoming) || byStart(a.showtimes.slice().sort(byStart)[0], b.showtimes.slice().sort(byStart)[0]));
+        scroller('uh-new', 'Neu im Kino', fresh.map((f) => {
+          const next = f.showtimes.filter(notStarted).sort(byStart)[0];
+          return {
+            title: f.title, poster: f.poster, href: f.href,
+            flag: f.fresh.upcoming ? { kind: 'start', label: f.fresh.label } : { kind: 'new', label: 'Neu' },
+            sub: next ? `${dayShort(next.date)} ${next.time}` : '',
+          };
+        }));
+        return new Set(fresh.map((f) => f.filmId));
+      }
+      function renderSliders(skipIds) {
+        const presale = (sliders.presale || []).filter((c) => !skipIds.has(c.filmId)).sort(byDate);
+        scroller('uh-presale', 'Vorverkauf', presale.map((c) => ({
+          title: c.title, poster: c.poster, href: filmHref(c), hiddenBtn: c.hiddenBtn, sub: fromLabel(c),
+        })));
+        const family = (sliders.family || []).slice().sort(byDate);
+        scroller('uh-family', 'Familie & Kinder', family.map((c) => ({
+          title: c.title, poster: c.poster, href: filmHref(c), hiddenBtn: c.hiddenBtn, sub: fromLabel(c),
+        })));
+        const events = (sliders.events || []).slice().sort(byDate);
+        const ev = box('uh-events');
+        ev.hidden = !events.length;
+        if (!events.length) return;
+        const MON = new Intl.DateTimeFormat('de-DE', { month: 'short' });
+        ev.innerHTML = `<div class="uv-sec-head"><div class="uv-h">Events</div>
+            <a class="uv-link" href="/eventkalender">Eventkalender →</a></div>
+          <div class="uh-events">${events.slice(0, 8).map((c, i) => {
+            const d = c.date ? parseYmd(c.date) : null;
+            const inner = `<span class="uh-date">${d ? `<b>${d.getDate()}</b><span>${MON.format(d).replace('.', '')}</span>` : '<b>–</b>'}</span>
+              <span class="uh-etext"><span class="uh-title">${esc(c.title)}</span>
+                <span class="uh-meta">${d ? esc(LONG_WEEKDAY.format(d)) : esc(c.dateLabel)}</span></span>`;
+            const href = filmHref(c);
+            return href ? `<a class="uh-event" href="${esc(href)}">${inner}</a>`
+              : `<button type="button" class="uh-event" data-idx="${i}">${inner}</button>`;
+          }).join('')}</div>`;
+        ev.querySelectorAll('button.uh-event').forEach((b) => {
+          b.onclick = () => { const c = events[+b.dataset.idx]; if (c.hiddenBtn) c.hiddenBtn.click(); };
+        });
+      }
+
+      renderNext();
+      renderSliders(new Set());
+      hideSpinner();
+
+      // The home page itself only carries today's remaining showings for
+      // a few films; the programme page has the whole week (~100 KB
+      // compressed). Retried like /coming-soon, for UCI's passing 502s.
+      (async () => {
+        try {
+          let res;
+          for (let attempt = 0; ; attempt++) {
+            res = await fetch(progHref + '/poster', { credentials: 'same-origin' });
+            if (res.ok || attempt >= 2) break;
+            await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+          }
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+          const { films } = programme(doc);
+          // Relative to the fetched page's own URL (DOMParser keeps none).
+          films.forEach((f) => {
+            if (f.poster) f.poster = new URL(f.poster, location.origin).pathname;
+            if (f.filmId) filmById.set(f.filmId, f);
+          });
+          if (!films.length) throw new Error('no films in programme');
+          state.films = films;
+          state.load = 'ok';
+          console.log(TAG, 'home: programme loaded,', films.length, 'films');
+        } catch (err) {
+          state.load = 'error';
+          console.warn(TAG, 'home: programme fetch failed:', err.message);
+        }
+        renderNext();
+        renderSliders(state.load === 'ok' ? renderNew() : new Set());
+      })();
+
+      // "in 12 min" counts down, and started showings drop off.
+      setInterval(() => { if (state.load === 'ok' && view.style.display !== 'none') renderNext(); }, 60000);
+      console.log(TAG, 'home page mounted for', cinemaPath);
+    }
+
+    let viewStyleIn = false;
+    function injectViewStyle() {
+      if (viewStyleIn) return;
+      viewStyleIn = true;
+      const style = document.createElement('style');
+      style.textContent = STYLE_CHIPS + VIEW_STYLE;
+      document.head.appendChild(style);
+    }
+
+    // The chip and badge rules from STYLE (shared by all three views),
+    // without the programme-page layout rules around them.
+    const STYLE_CHIPS = (STYLE.match(/:is\(#uci-browse,#uci-film,#uci-home\)[^{]*\{[^}]*\}/g) || []).join('\n');
+
+    const VIEW_STYLE = `
+      #uci-film,#uci-home{max-width:960px;width:100%;margin:24px auto 40px;box-sizing:border-box;
+        font-size:14px;line-height:1.45;color:#fff;background:#10141c;border-radius:12px;
+        box-shadow:0 2px 14px rgba(0,0,0,.25);overflow:hidden}
+      :is(#uci-film,#uci-home) *{box-sizing:border-box}
+      :is(#uci-film,#uci-home) a{color:inherit;text-decoration:none}
+      :is(#uci-film,#uci-home) button{font:inherit;min-height:0;margin:0}
+      :is(#uci-film,#uci-home) p,:is(#uci-film,#uci-home) dl,:is(#uci-film,#uci-home) dd{margin:0}
+
+      .uv-sec{padding:18px 24px;border-top:1px solid rgba(255,255,255,.07)}
+      .uv-sec[hidden]{display:none}
+      .uv-sec-head{display:flex;align-items:center;justify-content:space-between;gap:10px 16px;
+        flex-wrap:wrap;margin-bottom:12px}
+      .uv-h{font-size:12px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;color:#fff101}
+      .uv-pills{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+      .uv-pill{background:rgba(255,255,255,.06);border:1px solid transparent;color:#cfd6e0;
+        border-radius:999px;padding:4px 12px;font-size:12.5px;cursor:pointer;line-height:1.4}
+      .uv-pill:hover{background:rgba(255,255,255,.12)}
+      .uv-pill.active{background:#fff101;color:#000;font-weight:700}
+      .uv-check{display:flex;align-items:center;gap:6px;font-size:12.5px;color:#cfd6e0;
+        margin:0 0 0 6px;accent-color:#fff101;cursor:pointer;white-space:nowrap}
+      .uv-btn{display:inline-flex;align-items:center;gap:8px;background:rgba(255,255,255,.1);
+        color:#fff;border:1px solid rgba(255,255,255,.18);border-radius:8px;padding:9px 16px;
+        font-weight:700;font-size:13.5px;cursor:pointer}
+      .uv-btn:hover{background:rgba(255,255,255,.18)}
+      :is(#uci-film,#uci-home) .uv-link{background:none;border:0;padding:0;color:#8fc4f0;font-size:12.5px;font-weight:600;cursor:pointer}
+      :is(#uci-film,#uci-home) .uv-link:hover{color:#b3dcff;text-decoration:underline}
+      .uv-tag{display:inline-block;padding:1px 6px;border-radius:3px;font-size:9.5px;font-weight:700;
+        line-height:1.3;letter-spacing:.03em;text-transform:uppercase;color:#cfd6e0;
+        border:1px solid rgba(255,255,255,.3)}
+      .uv-cinema{display:inline-flex;align-items:center;gap:6px;background:none;border:0;padding:0;
+        color:#a9b4c2;font-size:12.5px;cursor:pointer;text-align:left}
+      .uv-cinema:hover{color:#fff}
+      .uv-cinema svg{color:#fff101;flex:0 0 auto}
+      .uv-empty{padding:22px 4px;color:#8b97a8;text-align:center;font-size:13px}
+      :is(#uci-film,#uci-home) .uv-empty a{color:#8fc4f0}
+      .uv-empty .uv-btn{margin-top:12px}
+      .uv-foot{display:flex;justify-content:center;flex-wrap:wrap;gap:6px 18px;padding:14px 24px 18px;
+        border-top:1px solid rgba(255,255,255,.07)}
+      :is(#uci-film,#uci-home) .uv-foot a,:is(#uci-film,#uci-home) .uv-foot span{font-size:11.5px;color:#6b7684;cursor:pointer}
+      :is(#uci-film,#uci-home) .uv-foot a:hover,:is(#uci-film,#uci-home) .uv-foot span:hover{color:#a9b4c2;text-decoration:underline}
+      #uci-browse-back{position:fixed;top:12px;left:12px;z-index:2147483647;
+        background:#fff101;color:#000;border:0;border-radius:6px;padding:8px 14px;
+        font-weight:700;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.3);min-height:0}
+
+      /* ---- film page ---- */
+      #uci-film .uf-hero{position:relative;display:flex;align-items:flex-end;gap:24px;
+        padding:120px 24px 22px;min-height:300px;isolation:isolate}
+      #uci-film .uf-hero--plain{padding-top:28px;min-height:0;
+        background:radial-gradient(ellipse at 15% 0%,rgba(255,241,1,.08),transparent 60%)}
+      #uci-film .uf-backdrop{position:absolute;inset:0;z-index:-1;background-size:cover;
+        background-position:center 30%}
+      #uci-film .uf-backdrop::after{content:'';position:absolute;inset:0;
+        background:linear-gradient(180deg,rgba(16,20,28,.1) 0%,rgba(16,20,28,.55) 45%,#10141c 92%)}
+      #uci-film .uf-poster{position:relative;flex:0 0 auto;width:156px;aspect-ratio:326/461;padding:0;
+        border:0;border-radius:10px;overflow:hidden;background:#1b2130;cursor:pointer;
+        box-shadow:0 10px 30px rgba(0,0,0,.55),0 0 0 1px rgba(255,255,255,.08)}
+      #uci-film .uf-poster:disabled{cursor:default}
+      #uci-film .uf-poster img{display:block;width:100%;height:100%;object-fit:cover}
+      #uci-film .uf-play{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+        background:rgba(0,0,0,.35);opacity:0;transition:opacity .15s}
+      #uci-film .uf-play::before{content:'';width:46px;height:46px;border-radius:50%;
+        background:rgba(255,241,1,.95) no-repeat 55% 50%/16px
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 12'%3E%3Cpath d='M0 0l10 6-10 6z'/%3E%3C/svg%3E")}
+      #uci-film .uf-poster:hover .uf-play{opacity:1}
+      #uci-film .uf-head{min-width:0;flex:1}
+      #uci-film .uf-head .ub-badges{margin-bottom:8px}
+      #uci-film .uf-title{font-size:32px;font-weight:800;line-height:1.1;letter-spacing:-.01em;
+        text-shadow:0 2px 12px rgba(0,0,0,.5);overflow-wrap:anywhere}
+      #uci-film .uf-meta{margin-top:8px;font-size:13px;color:#cfd6e0}
+      #uci-film .uf-meta i{font-style:normal;color:#6b7684;margin:0 7px}
+      #uci-film .uf-actions{display:flex;flex-wrap:wrap;align-items:stretch;gap:10px;margin-top:16px}
+      #uci-film .uf-cta{display:flex;flex-direction:column;justify-content:center;background:#fff101;color:#000;
+        border-radius:8px;padding:6px 16px;line-height:1.25;box-shadow:0 4px 18px rgba(255,241,1,.18)}
+      #uci-film .uf-cta:hover{background:#fff64d}
+      #uci-film .uf-cta-k{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;opacity:.65}
+      #uci-film .uf-cta-v{font-size:15px;font-weight:800}
+      #uci-film .uf-cta-v em{font-style:normal;font-weight:600;font-size:12px;opacity:.7;margin-left:4px}
+      #uci-film .uf-tri{width:0;height:0;border-style:solid;border-width:6px 0 6px 10px;
+        border-color:transparent transparent transparent #fff101}
+
+      #uci-film .uf-filters{display:flex;flex-wrap:wrap;gap:8px 18px;margin-bottom:14px}
+      #uci-film .uf-days{display:flex;flex-direction:column}
+      #uci-film .uf-day{display:grid;grid-template-columns:104px 1fr;gap:12px;align-items:center;
+        padding:9px 0;border-bottom:1px solid rgba(255,255,255,.06)}
+      #uci-film .uf-day:last-child{border-bottom:0}
+      #uci-film .uf-dlabel{display:flex;flex-direction:column;line-height:1.2}
+      #uci-film .uf-dlabel b{font-size:14px;font-weight:700}
+      #uci-film .uf-dlabel span{font-size:11.5px;color:#8b97a8}
+      #uci-film .uf-day--today .uf-dlabel b{color:#fff101}
+      #uci-film .uf-day--weekend .uf-dlabel span{color:#b9a960}
+      #uci-film .uf-chips{display:flex;flex-wrap:wrap;gap:6px}
+      #uci-film .chip{width:70px;min-height:40px}
+      #uci-film .chip-time{font-size:13px}
+      #uci-film .uf-alldays{margin-top:12px}
+      #uci-film .uf-extras{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px}
+      #uci-film .uf-extras span{font-size:10.5px;color:#a9b4c2;border:1px dashed rgba(255,255,255,.2);
+        border-radius:4px;padding:2px 7px;cursor:help}
+
+      #uci-film .uf-info{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:24px}
+      #uci-film .uf-info .uv-h{margin-bottom:8px}
+      #uci-film .uf-text{color:#cfd6e0;font-size:14px;line-height:1.6;display:-webkit-box;
+        -webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden}
+      #uci-film .uf-text.open{display:block}
+      #uci-film .uf-readmore{margin-top:6px}
+      #uci-film .uf-facts{display:flex;flex-direction:column;gap:10px}
+      #uci-film .uf-facts dt{font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#6b7684}
+      #uci-film .uf-facts dd{font-size:13px;color:#cfd6e0}
+
+      /* ---- home page ---- */
+      #uci-home .uh-top{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;
+        padding:22px 24px 18px;background:radial-gradient(ellipse at 0% 0%,rgba(255,241,1,.09),transparent 55%)}
+      #uci-home .uh-kicker{font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#8b97a8}
+      #uci-home .uh-cinema{display:inline-flex;align-items:center;gap:8px;background:none;border:0;padding:0;
+        color:#fff;font-size:22px;font-weight:800;line-height:1.2;cursor:pointer;text-align:left}
+      #uci-home .uh-cinema svg{width:16px;height:16px;color:#fff101;flex:0 0 auto}
+      #uci-home .uh-cinema:hover{text-decoration:underline;text-decoration-color:rgba(255,241,1,.6)}
+      #uci-home .uh-all{flex:0 0 auto;background:#fff101;color:#000;font-weight:800;font-size:13.5px;
+        border-radius:8px;padding:9px 16px;white-space:nowrap}
+      #uci-home .uh-all:hover{background:#fff64d}
+
+      #uci-home .uh-list{display:flex;flex-direction:column}
+      #uci-home .uh-row{display:grid;grid-template-columns:64px minmax(0,1fr) auto;gap:14px;align-items:center;
+        padding:7px 6px;margin:0 -6px;border-radius:8px}
+      #uci-home .uh-row:hover{background:rgba(255,255,255,.04)}
+      #uci-home .uh-row + .uh-row{border-top:1px solid rgba(255,255,255,.05)}
+      #uci-home .uh-time{display:flex;flex-direction:column;line-height:1.15}
+      #uci-home .uh-time b{font-size:18px;font-weight:800;font-variant-numeric:tabular-nums}
+      #uci-home .uh-time span{font-size:10.5px;color:#8b97a8;white-space:nowrap}
+      #uci-home .uh-row--soon .uh-time span{color:#fff101;font-weight:700}
+      #uci-home .uh-film{display:flex;align-items:center;gap:12px;min-width:0}
+      #uci-home .uh-thumb{width:34px;height:48px;border-radius:4px;object-fit:cover;flex:0 0 auto;
+        background:rgba(255,255,255,.08)}
+      #uci-home .uh-ftext,#uci-home .uh-etext{display:flex;flex-direction:column;min-width:0}
+      #uci-home .uh-title{font-weight:650;font-size:14px;line-height:1.3;white-space:nowrap;
+        overflow:hidden;text-overflow:ellipsis}
+      #uci-home .uh-film:hover .uh-title{text-decoration:underline}
+      #uci-home .uh-meta{display:flex;flex-wrap:wrap;align-items:center;gap:3px 8px;font-size:11.5px;
+        color:#8b97a8;margin-top:2px}
+      #uci-home .uh-lang{color:#8fc4f0;font-weight:700}
+      #uci-home .uh-fmt{color:#e8dc6a;font-weight:600}
+      #uci-home .uh-buy{font-size:12px;font-weight:700;color:#fff101;border:1px solid rgba(255,241,1,.45);
+        border-radius:999px;padding:4px 12px;white-space:nowrap}
+      #uci-home .uh-buy:hover{background:#fff101;color:#000}
+      #uci-home .uh-more{margin-top:10px}
+      #uci-home .uh-skel{display:flex;flex-direction:column;gap:10px}
+      #uci-home .uh-skel div{height:48px;border-radius:8px;
+        background:linear-gradient(90deg,rgba(255,255,255,.04),rgba(255,255,255,.09),rgba(255,255,255,.04));
+        background-size:200% 100%;animation:uh-shimmer 1.2s linear infinite}
+      @keyframes uh-shimmer{to{background-position:-200% 0}}
+
+      #uci-home .uh-arrows{display:flex;align-items:center;gap:6px}
+      #uci-home .uh-arrows .uv-link{margin-right:6px}
+      #uci-home .uh-arrow{width:28px;height:28px;border-radius:50%;border:1px solid rgba(255,255,255,.18);
+        background:rgba(255,255,255,.06);color:#fff;font-size:17px;line-height:1;cursor:pointer;padding:0 0 2px}
+      #uci-home .uh-arrow:hover{background:rgba(255,255,255,.14)}
+      #uci-home .uh-scroller{display:grid;grid-auto-flow:column;grid-auto-columns:128px;gap:14px;
+        overflow-x:auto;scroll-snap-type:x proximity;padding:2px 2px 8px;margin:0 -2px;scrollbar-width:thin;
+        scrollbar-color:rgba(255,255,255,.15) transparent}
+      #uci-home .uh-card{display:flex;flex-direction:column;gap:6px;scroll-snap-align:start;background:none;
+        border:0;padding:0;color:#fff;text-align:left;cursor:pointer;min-width:0}
+      #uci-home .uh-poster{position:relative;display:block;width:100%;aspect-ratio:200/283;border-radius:8px;
+        overflow:hidden;background:rgba(255,255,255,.06);box-shadow:0 0 0 1px rgba(255,255,255,.06)}
+      #uci-home .uh-poster img{display:block;width:100%;height:100%;object-fit:cover;transition:transform .2s}
+      #uci-home .uh-card:hover .uh-poster img{transform:scale(1.04)}
+      #uci-home .uh-flag{position:absolute;top:6px;left:6px;font-size:9.5px;font-weight:800;letter-spacing:.04em;
+        text-transform:uppercase;padding:2px 6px;border-radius:3px}
+      #uci-home .uh-flag--new{background:#fff101;color:#000}
+      #uci-home .uh-flag--start{background:rgba(16,20,28,.85);color:#fff101;border:1px solid rgba(255,241,1,.6)}
+      #uci-home .uh-ctitle{font-size:12.5px;font-weight:650;line-height:1.3;overflow:hidden;display:-webkit-box;
+        -webkit-line-clamp:2;-webkit-box-orient:vertical}
+      #uci-home .uh-csub{font-size:11px;color:#8b97a8;margin-top:-3px}
+
+      #uci-home .uh-events{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+      #uci-home .uh-event{display:flex;align-items:center;gap:12px;padding:8px;border-radius:8px;
+        background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.06);color:#fff;text-align:left;
+        cursor:pointer;min-width:0}
+      #uci-home .uh-event:hover{background:rgba(255,255,255,.08)}
+      #uci-home .uh-date{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:0 0 auto;
+        width:44px;height:44px;border-radius:7px;background:rgba(180,120,230,.14);border:1px solid rgba(180,120,230,.45);
+        line-height:1}
+      #uci-home .uh-date b{font-size:17px;font-weight:800}
+      #uci-home .uh-date span{font-size:9.5px;font-weight:700;text-transform:uppercase;color:#d3b2f2;margin-top:2px}
+      #uci-home .uh-event .uh-title{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;
+        -webkit-box-orient:vertical}
+
+      @media (max-width: 640px) {
+        #uci-film,#uci-home{margin:12px auto 24px;border-radius:0}
+        .uv-sec{padding:16px}
+        .uv-foot{padding:12px 16px 16px}
+        #uci-film .uf-hero{padding:90px 16px 18px;gap:14px;align-items:flex-end;min-height:0}
+        #uci-film .uf-hero--plain{padding-top:18px}
+        #uci-film .uf-poster{width:96px;border-radius:8px}
+        #uci-film .uf-title{font-size:22px}
+        #uci-film .uf-meta{font-size:12px}
+        #uci-film .uf-meta i{margin:0 4px}
+        #uci-film .uf-actions{margin-top:12px;gap:8px}
+        #uci-film .uf-cta{padding:5px 12px}
+        #uci-film .uf-cta-v{font-size:14px}
+        #uci-film .uv-btn{padding:8px 12px}
+        #uci-film .uf-day{grid-template-columns:1fr;gap:6px}
+        #uci-film .uf-dlabel{flex-direction:row;align-items:baseline;gap:8px}
+        #uci-film .uf-chips .chip{width:calc((100% - 18px) / 4)}
+        #uci-film .uf-info{grid-template-columns:1fr;gap:18px}
+        #uci-home .uh-top{padding:16px;flex-direction:column;align-items:stretch}
+        #uci-home .uh-cinema{font-size:19px}
+        #uci-home .uh-all{text-align:center}
+        #uci-home .uh-row{grid-template-columns:52px minmax(0,1fr) auto;gap:10px}
+        #uci-home .uh-time b{font-size:16px}
+        #uci-home .uh-thumb{width:30px;height:43px}
+        #uci-home .uh-film{gap:9px}
+        #uci-home .uh-buy{padding:4px 9px;font-size:11.5px}
+        #uci-home .uh-arrow{display:none}
+        #uci-home .uh-scroller{grid-auto-columns:112px;gap:12px;margin:0 -16px;padding:2px 16px 8px;
+          scroll-padding:0 16px}
+        #uci-home .uh-events{grid-template-columns:1fr}
+      }`;
+
     function mount() {
       const grid = document.querySelector('.movies-grid');
       if (!grid) return false;
@@ -4521,10 +5348,19 @@
       // click. Renders again when it arrives.
       if (demnaechstState === 'idle') loadDemnaechst();
       registerBrowseTools();
-      clearTimeout(spinnerTimeout);
-      spinner.remove();
+      hideSpinner();
       console.log(TAG, 'mounted, replacing .movies-grid');
       return true;
+    }
+
+    // Film and home pages: their markup is complete at DOMContentLoaded,
+    // so no polling. Any error shows the original page instead.
+    if (pageKind !== 'programme') {
+      const run = pageKind === 'film' ? mountFilmPage : mountHomePage;
+      const go = () => { try { run(); } catch (err) { console.error(TAG, err); giveUp('mount failed'); } };
+      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', go, { once: true });
+      else go();
+      return;
     }
 
     // Tried once right away, since setInterval's first tick only comes

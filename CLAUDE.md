@@ -149,6 +149,12 @@ into the DOM, e.g. with a throwaway page-world overlay script.
   separate rewrite. It reads `book.seatingApp` models and clicks through
   UCI's own seat helper (see `docs/API.md`), not seatsAndTickets.json plus
   synthetic canvas clicks.
+- `test/dev-proxy.py` — `python3 test/dev-proxy.py`, then open
+  `http://127.0.0.1:8766/<same path as on www>`. Proxies the www pages
+  with the working copy injected at document-start, so the programme,
+  film and home views can be checked in any browser (the built-in browser
+  pane included) without Tampermonkey or a push. A page on https can't
+  load the script from 127.0.0.1 directly; this sidesteps that. www only.
 - `test/webmcp-stub.user.js` — testing-only helper script: a fake
   `document.modelContext` so the WebMCP tools can be exercised in a Chrome
   without WebMCP. Install it next to the local build, then call tools from

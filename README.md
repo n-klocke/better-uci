@@ -5,6 +5,8 @@ website:
   multi-step dialog per card.
 - **Programme page** — a denser, filterable schedule view instead of the
   native poster grid.
+- **Film and cinema home pages** — every showing at a glance, and what's on
+  next.
 - **WebMCP** — both pages offer tools to AI agents in the browser, so an
   agent can find showtimes and redeem your cards (with your confirmation).
 ## Install
@@ -85,6 +87,27 @@ Replaces the poster grid with a list view:
   first click: release date, and a **Buchen** button once it's actually
   bookable.
 - A **search box** that filters whichever tab you're on, umlaut-insensitive.
+## Film page
+Replaces the trailer banner and the per-format showtime tables with one
+view: the poster (click it for the trailer), runtime, FSK and genre, and a
+**Nächste Vorstellung** button straight to booking. Below that, every
+showing grouped by day, with **language** (Deutsch / OV / OmU) and
+**format** (IMAX, 3D, iSense, …) filters. Started showings disappear on
+their own. Hover a time for the hall and when the film ends (start plus
+runtime, without ads). Plot, director and cast come last.
+
+## Cinema home page
+`/home/<kino>` becomes a "what's on" page for your cinema:
+- **Als Nächstes** — every film's showings for today, tomorrow and the day
+  after, merged into one timeline. Each row has the hall, language, format,
+  "in 12 min" or the end time, and a **Tickets** button. There's a **Nur OV**
+  toggle, shared with the programme page.
+- **Neu im Kino** — this week's new films and starts, with their next
+  showing.
+- **Vorverkauf**, **Events** (as a dated list) and **Familie & Kinder**.
+
+Both pages keep **Original-Ansicht zeigen** at the bottom.
+
 ## AI agents (WebMCP)
 <img width="360" alt="better-uci's confirmation dialog for an agent's request to redeem two Unlimited cards, with a seat map of the booked seats" src="docs/screenshots/webmcp-confirm.png" />
 
